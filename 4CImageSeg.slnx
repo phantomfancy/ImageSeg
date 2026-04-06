@@ -1,0 +1,8 @@
+<Solution>
+  <Project Path="4CImageSeg.ApiService/4CImageSeg.ApiService.csproj" />
+  <Project Path="4CImageSeg.AppHost/4CImageSeg.AppHost.csproj" />
+  <Project Path="4CImageSeg.ServiceDefaults/4CImageSeg.ServiceDefaults.csproj" />
+  <Project Path="4CImageSeg.Tests/4CImageSeg.Tests.csproj" />
+  <Project Path="4CImageSeg.Web/4CImageSeg.Web.csproj" />
+  <Project Path="4CImageSeg.Web.Client/4CImageSeg.Web.Client.csproj" />
+</Solution>

@@ -1,0 +1,44 @@
+@inherits LayoutComponentBase
+
+<div class="app-shell">
+    <div class="shell">
+        <aside class="shell__sidebar">
+            <NavMenu />
+        </aside>
+
+        <div class="shell__surface">
+            <header class="shell__header">
+                <div>
+                    <p class="shell__eyebrow">4C-ai装备识别工具</p>
+                    <strong>导入媒体、执行检测、查看结果并导出</strong>
+                </div>
+                <div class="shell__badges">
+                    <span>图片识别</span>
+                    <span>视频识别</span>
+                    <span>摄像头识别</span>
+                </div>
+            </header>
+
+            <main class="shell__content">
+                @Body
+            </main>
+        </div>
+    </div>
+
+    <footer class="app-footer">
+        <div class="app-footer__primary">
+            <strong>4C-ai装备识别工具</strong>
+            <span>copyright author@2026-</span>
+        </div>
+        <div class="app-footer__secondary">
+            <span>ASP.NET Core 10 + Blazor Auto + PWA + Aspire</span>
+            <span>粤ICP备xxx号</span>
+        </div>
+    </footer>
+</div>
+
+<div id="blazor-error-ui" data-nosnippet>
+    页面出现未处理异常。
+    <a href="." class="reload">重新加载</a>
+    <span class="dismiss">关闭</span>
+</div>

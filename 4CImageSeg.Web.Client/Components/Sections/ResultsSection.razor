@@ -1,0 +1,115 @@
+@implements IDisposable
+@inject RecognitionWorkbenchState Workbench
+
+<h1>结果与导出</h1>
+<p class="page-intro">
+    在这里查看检测结果，并导出图像、视频或结构化结果文件。
+</p>
+
+<div class="workspace-grid">
+    <section class="panel">
+        <h2>结果预览</h2>
+        <div class="preview-board">
+            <div class="preview-tile">
+                <span>图像检测</span>
+                <strong>@ImagePreviewSummary</strong>
+            </div>
+            <div class="preview-tile">
+                <span>视频检测</span>
+                <strong>@VideoPreviewSummary</strong>
+            </div>
+            <div class="preview-tile">
+                <span>任务状态</span>
+                <strong>@CurrentResultState</strong>
+            </div>
+        </div>
+        <p class="meta">检测完成后，可在此核对目标位置、类别信息和结果文件。</p>
+    </section>
+
+    <section class="panel">
+        <h2>导出动作</h2>
+        <ul class="export-list">
+            <li><strong>结果图像</strong><span>PNG / JPEG，叠加框线、标签和置信度</span></li>
+            <li><strong>结果视频</strong><span>MP4 / WebM，后续优先走服务器端转码与导出</span></li>
+            <li><strong>结构化结果</strong><span>JSON，保存检测框、类别、时间戳和模式信息</span></li>
+        </ul>
+        <div class="control-row">
+            <button class="btn btn-dark" disabled>导出结果图像</button>
+            <button class="btn btn-outline-dark" disabled>导出结果视频</button>
+        </div>
+    </section>
+</div>
+
+@code {
+    private string CurrentResultState => Workbench.LastJob is null ? "等待开始检测" : "已收到任务结果";
+    private string ImagePreviewSummary => Workbench.ImageCount == 0 ? "尚未导入图像" : $"已准备 {Workbench.ImageCount} 组图像结果";
+    private string VideoPreviewSummary => Workbench.VideoCount == 0 ? "尚未导入视频" : $"已准备 {Workbench.VideoCount} 组视频结果";
+
+    protected override void OnInitialized()
+    {
+        Workbench.Changed += HandleStateChanged;
+    }
+
+    private void HandleStateChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        Workbench.Changed -= HandleStateChanged;
+    }
+}
+
+<style>
+    .preview-board {
+        display: grid;
+        gap: 0.75rem;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    }
+
+    .preview-tile {
+        padding: 1rem;
+        border-radius: 1rem;
+        background: linear-gradient(145deg, #fff8ee, #f1e8d8);
+        border: 1px solid rgba(20, 33, 39, 0.08);
+        display: grid;
+        gap: 0.35rem;
+    }
+
+    .preview-tile span {
+        color: #687d81;
+        font-size: 0.9rem;
+    }
+
+    .export-list {
+        list-style: none;
+        padding: 0;
+        margin: 0 0 1rem;
+        display: grid;
+        gap: 0.75rem;
+    }
+
+    .export-list li {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 0.85rem 0.95rem;
+        border-radius: 1rem;
+        background: #f4ede0;
+    }
+
+    .export-list span {
+        color: #5f6f72;
+        text-align: right;
+    }
+
+    .control-row {
+        display: flex;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+    }
+
+    @@media (max-width: 640px) {
+        .export-list li {
+            flex-direction: column;
+        }
+    }
+</style>

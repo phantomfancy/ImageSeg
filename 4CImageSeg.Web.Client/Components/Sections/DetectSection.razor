@@ -1,0 +1,105 @@
+@implements IDisposable
+@inject RecognitionWorkbenchState Workbench
+
+<h1>执行检测</h1>
+<p class="page-intro">
+    选择处理方式并开始识别。导入与采集步骤中准备好的图片、视频和摄像头输入会在这里继续使用。
+</p>
+
+<div class="workspace-grid">
+    <section class="panel">
+        <h2>待处理媒体</h2>
+        <div class="job-card">
+            <span>图片数量：@Workbench.ImageCount</span>
+            <span>视频数量：@Workbench.VideoCount</span>
+            <span>总输入大小：@RecognitionWorkbenchState.FormatBytes(Workbench.TotalImageBytes + Workbench.TotalVideoBytes)</span>
+        </div>
+    </section>
+
+    <section class="panel">
+        <h2>检测模式</h2>
+        <p class="meta">根据任务规模、处理速度和可用资源选择合适的处理方式。</p>
+        <select class="form-select mode-select" @bind="Workbench.SelectedMode">
+            @foreach (var option in Workbench.RecognitionModes)
+            {
+                <option value="@option.Value">@option.Label</option>
+            }
+        </select>
+    </section>
+</div>
+
+<section class="panel panel--wide">
+    <div class="panel__row">
+        <div>
+            <h2>任务提交</h2>
+            <p class="meta">确认输入源和处理方式后，提交识别任务并等待结果返回。</p>
+        </div>
+        <button class="btn btn-dark"
+                @onclick="Workbench.SubmitRecognitionAsync"
+                disabled="@(!Workbench.Images.Any() && !Workbench.Videos.Any() || Workbench.Submitting)">
+            @Workbench.SubmitButtonText
+        </button>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Workbench.StatusMessage))
+    {
+        <div class="status-banner">@Workbench.StatusMessage</div>
+    }
+
+    @if (Workbench.LastJob is not null)
+    {
+        <div class="job-card">
+            <strong>最近一次任务：@Workbench.LastJob.JobId</strong>
+            <span>处理方式：@Workbench.LastJob.Mode</span>
+            <span>状态：@Workbench.LastJob.Status</span>
+            <span>说明：@Workbench.LastJob.Message</span>
+        </div>
+    }
+</section>
+
+@code {
+    protected override void OnInitialized()
+    {
+        Workbench.Changed += HandleStateChanged;
+    }
+
+    private void HandleStateChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        Workbench.Changed -= HandleStateChanged;
+    }
+}
+
+<style>
+    .panel--wide {
+        margin-top: 1rem;
+    }
+
+    .panel__row {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: center;
+        margin-bottom: 1rem;
+    }
+
+    .mode-select {
+        max-width: 18rem;
+    }
+
+    .status-banner {
+        padding: 0.95rem 1rem;
+        border-radius: 1rem;
+        margin-top: 1rem;
+        background: rgba(12, 110, 122, 0.12);
+        color: #124c57;
+    }
+
+    @@media (max-width: 640px) {
+        .panel__row {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+    }
+</style>

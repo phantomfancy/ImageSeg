@@ -1,0 +1,279 @@
+@using System.ComponentModel.DataAnnotations
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+@inject RecognitionWorkbenchState Workbench
+
+<h1>导入与采集</h1>
+<p class="page-intro">
+    先准备输入源。导入图片、导入视频或在配置校准后启动摄像头视频流，作为识别输入源。
+</p>
+
+<div class="workspace-grid">
+    <section class="panel">
+        <h2>图片导入</h2>
+        <InputFile OnChange="Workbench.HandleImagesSelected" accept="image/*" multiple />
+        <p class="meta">已选 @Workbench.ImageCount 张图片，总大小 @RecognitionWorkbenchState.FormatBytes(Workbench.TotalImageBytes)</p>
+
+        @if (Workbench.Images.Count > 0)
+        {
+            <ul class="file-list">
+                @foreach (var item in Workbench.Images)
+                {
+                    <li><strong>@item.Name</strong><span>@item.ContentType · @RecognitionWorkbenchState.FormatBytes(item.Size)</span></li>
+                }
+            </ul>
+        }
+    </section>
+
+    <section class="panel">
+        <h2>视频导入</h2>
+        <InputFile OnChange="Workbench.HandleVideosSelected" accept="video/*" multiple />
+        <p class="meta">已选 @Workbench.VideoCount 个视频，总大小 @RecognitionWorkbenchState.FormatBytes(Workbench.TotalVideoBytes)</p>
+
+        @if (Workbench.Videos.Count > 0)
+        {
+            <ul class="file-list">
+                @foreach (var item in Workbench.Videos)
+                {
+                    <li><strong>@item.Name</strong><span>@item.ContentType · @RecognitionWorkbenchState.FormatBytes(item.Size)</span></li>
+                }
+            </ul>
+        }
+    </section>
+</div>
+
+<section class="panel">
+    <div class="panel__row">
+        <div>
+            <h2>摄像头视频流</h2>
+            <p class="meta">用于实时预览和后续实时检测。</p>
+        </div>
+        <button class="btn btn-outline-dark btn-sm" @onclick="RefreshDevicesAsync">刷新设备</button>
+    </div>
+
+    <label class="form-label" for="camera-device">当前设备</label>
+    <select id="camera-device" class="form-select" @bind="_selectedDeviceId">
+        <option value="">默认摄像头</option>
+        @foreach (var device in _devices)
+        {
+            <option value="@device.DeviceId">@device.Label</option>
+        }
+    </select>
+
+    <div class="control-row">
+        <button class="btn btn-dark" @onclick="StartPreviewAsync">开始预览</button>
+        <button class="btn btn-outline-secondary" @onclick="StopPreviewAsync">停止预览</button>
+    </div>
+
+    <video @ref="_videoElement" class="camera-preview" autoplay playsinline muted></video>
+    <p class="meta">@_cameraStatusMessage</p>
+</section>
+
+<section class="panel">
+    <div class="panel__row">
+        <div>
+            <h2>摄像头校准</h2>
+            <p class="meta">作为摄像头采集的配套能力，当前先提供参数录入和校准图像导入模型。</p>
+        </div>
+    </div>
+
+    <div class="workspace-grid">
+        <section class="panel panel--nested">
+            <EditForm Model="_calibrationModel" OnValidSubmit="SaveProfile">
+                <DataAnnotationsValidator />
+                <ValidationSummary />
+
+                <div class="mb-3">
+                    <label class="form-label">配置名称</label>
+                    <InputText class="form-control" @bind-Value="_calibrationModel.ProfileName" />
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">标定板列数</label>
+                    <InputNumber class="form-control" @bind-Value="_calibrationModel.BoardColumns" />
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">标定板行数</label>
+                    <InputNumber class="form-control" @bind-Value="_calibrationModel.BoardRows" />
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">方格边长（mm）</label>
+                    <InputNumber class="form-control" @bind-Value="_calibrationModel.SquareSizeMm" />
+                </div>
+
+                <button type="submit" class="btn btn-dark">保存校准配置</button>
+            </EditForm>
+        </section>
+
+        <section class="panel panel--nested">
+            <h3>校准图像导入</h3>
+            <InputFile OnChange="HandleCalibrationImages" accept="image/*" multiple />
+            <p class="meta">当前已导入 @_calibrationImageCount 张校准图像。</p>
+
+            @if (_savedProfiles.Count > 0)
+            {
+                <h3 class="mt-4">已保存配置</h3>
+                <ul class="file-list">
+                    @foreach (var profile in _savedProfiles)
+                    {
+                        <li>
+                            <strong>@profile.ProfileName</strong>
+                            <span>@profile.BoardColumns x @profile.BoardRows · @profile.SquareSizeMm mm</span>
+                        </li>
+                    }
+                </ul>
+            }
+        </section>
+    </div>
+</section>
+
+@code {
+    private readonly List<CameraDevice> _devices = [];
+    private readonly List<CalibrationProfile> _savedProfiles = [];
+    private ElementReference _videoElement;
+    private IJSObjectReference? _module;
+    private string _selectedDeviceId = string.Empty;
+    private string _cameraStatusMessage = "尚未初始化摄像头。";
+    private CalibrationProfile _calibrationModel = new("默认相机", 9, 6, 25);
+    private int _calibrationImageCount;
+
+    private async Task RefreshDevicesAsync()
+    {
+        try
+        {
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "/js/camera.js");
+            var devices = await _module.InvokeAsync<CameraDevice[]>("listVideoDevices");
+            _devices.Clear();
+            _devices.AddRange(devices);
+            _cameraStatusMessage = _devices.Count == 0
+                ? "未检测到可用的视频输入设备。请先授予浏览器摄像头权限。"
+                : $"已检测到 {_devices.Count} 个摄像头设备。";
+        }
+        catch (Exception ex)
+        {
+            _cameraStatusMessage = $"读取摄像头设备失败：{ex.Message}";
+        }
+    }
+
+    private async Task StartPreviewAsync()
+    {
+        try
+        {
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "/js/camera.js");
+            await _module.InvokeVoidAsync("startPreview", _videoElement, _selectedDeviceId);
+            _cameraStatusMessage = string.IsNullOrWhiteSpace(_selectedDeviceId)
+                ? "已启动默认摄像头预览。"
+                : "已启动指定摄像头预览。";
+        }
+        catch (Exception ex)
+        {
+            _cameraStatusMessage = $"启动预览失败：{ex.Message}";
+        }
+    }
+
+    private async Task StopPreviewAsync()
+    {
+        if (_module is null)
+        {
+            _cameraStatusMessage = "当前没有活动的摄像头预览。";
+            return;
+        }
+
+        await _module.InvokeVoidAsync("stopPreview", _videoElement);
+        _cameraStatusMessage = "已停止摄像头预览。";
+    }
+
+    private void HandleCalibrationImages(InputFileChangeEventArgs args)
+    {
+        _calibrationImageCount = args.FileCount;
+    }
+
+    private void SaveProfile()
+    {
+        _savedProfiles.Add(new CalibrationProfile(
+            _calibrationModel.ProfileName,
+            _calibrationModel.BoardColumns,
+            _calibrationModel.BoardRows,
+            _calibrationModel.SquareSizeMm));
+
+        _calibrationModel = new CalibrationProfile(
+            string.Empty,
+            _calibrationModel.BoardColumns,
+            _calibrationModel.BoardRows,
+            _calibrationModel.SquareSizeMm);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_module is not null)
+        {
+            await _module.InvokeVoidAsync("stopPreview", _videoElement);
+            await _module.DisposeAsync();
+        }
+    }
+
+    private sealed record CameraDevice(string DeviceId, string Label);
+
+    private sealed class CalibrationProfile
+    {
+        [Required(ErrorMessage = "请输入配置名称")]
+        public string ProfileName { get; set; } = string.Empty;
+
+        [Range(2, 64)]
+        public int BoardColumns { get; set; }
+
+        [Range(2, 64)]
+        public int BoardRows { get; set; }
+
+        [Range(1, 500)]
+        public decimal SquareSizeMm { get; set; }
+
+        public CalibrationProfile()
+        {
+        }
+
+        public CalibrationProfile(string profileName, int boardColumns, int boardRows, decimal squareSizeMm)
+        {
+            ProfileName = profileName;
+            BoardColumns = boardColumns;
+            BoardRows = boardRows;
+            SquareSizeMm = squareSizeMm;
+        }
+    }
+}
+
+<style>
+    .panel__row {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: center;
+        margin-bottom: 1rem;
+    }
+
+    .control-row {
+        display: flex;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+        margin-top: 0.9rem;
+    }
+
+    .camera-preview {
+        width: 100%;
+        min-height: 280px;
+        margin-top: 1rem;
+        border-radius: 1rem;
+        background: linear-gradient(135deg, #172329, #0d1217);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        object-fit: cover;
+    }
+
+    @@media (max-width: 640px) {
+        .panel__row {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+    }
+</style>
