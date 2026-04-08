@@ -11,7 +11,7 @@
 <div class="workspace-grid">
     <section class="panel">
         <h2>图片导入</h2>
-        <InputFile OnChange="Workbench.HandleImagesSelected" accept="image/*" multiple />
+        <InputFile OnChange="Workbench.HandleImagesSelectedAsync" accept="image/*" multiple />
         <p class="meta">已选 @Workbench.ImageCount 张图片，总大小 @RecognitionWorkbenchState.FormatBytes(Workbench.TotalImageBytes)</p>
 
         @if (Workbench.Images.Count > 0)
@@ -22,6 +22,14 @@
                     <li><strong>@item.Name</strong><span>@item.ContentType · @RecognitionWorkbenchState.FormatBytes(item.Size)</span></li>
                 }
             </ul>
+        }
+
+        @if (Workbench.CurrentImage is not null)
+        {
+            <div class="image-preview">
+                <img src="@Workbench.CurrentImage.DataUrl" alt="当前识别图片预览" />
+            </div>
+            <p class="meta">当前阶段的本地识别将默认使用这张图片进行推理。</p>
         }
     </section>
 
@@ -268,6 +276,22 @@
         background: linear-gradient(135deg, #172329, #0d1217);
         border: 1px solid rgba(255, 255, 255, 0.08);
         object-fit: cover;
+    }
+
+    .image-preview {
+        margin-top: 1rem;
+        border-radius: 1rem;
+        overflow: hidden;
+        border: 1px solid rgba(20, 33, 39, 0.08);
+        background: #f4ede0;
+    }
+
+    .image-preview img {
+        display: block;
+        width: 100%;
+        max-height: 320px;
+        object-fit: contain;
+        background: #fff;
     }
 
     @@media (max-width: 640px) {

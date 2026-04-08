@@ -7,6 +7,7 @@ builder.Services.AddScoped(_ => new HttpClient
     BaseAddress = new Uri(builder.HostEnvironment.BaseAddress)
 });
 builder.Services.AddScoped<SpaNavigationState>();
+builder.Services.AddScoped<RecognitionApiClient>();
 builder.Services.AddScoped<RecognitionWorkbenchState>();
 
 await builder.Build().RunAsync();

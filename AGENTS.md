@@ -3,7 +3,7 @@
 ## 1. 项目基础信息
 
 - 项目名称：`4C-ai装备识别工具`
-- 技术栈：`Tensorflow + ASP.NET Core 10 + Blazor Web App Auto + Aspire 13`
+- 技术栈：`ONNX + ASP.NET Core 10 + Blazor Web App Auto + Aspire 13`
 - 项目目标：基于图像的装备识别，支持单图和批量图片输入，输出识别结果和可视化结果图，支持本地端和服务器端两种识别模式。
 
 ## 2. 环境搭建

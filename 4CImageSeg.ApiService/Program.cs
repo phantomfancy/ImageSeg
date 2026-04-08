@@ -1,4 +1,6 @@
 using Microsoft.Extensions.Options;
+using _4CImageSeg.Contracts;
+using _4CImageSeg.ApiService;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -9,6 +11,9 @@ builder.AddServiceDefaults();
 builder.Services.AddProblemDetails();
 builder.Services.AddOpenApi();
 builder.Services.Configure<RecognitionOptions>(builder.Configuration.GetSection("Recognition"));
+builder.Services.Configure<OnnxRecognitionOptions>(builder.Configuration.GetSection("OnnxRecognition"));
+builder.Services.AddHttpClient();
+builder.Services.AddSingleton<OnnxRecognitionService>();
 
 var app = builder.Build();
 
@@ -31,7 +36,7 @@ app.MapGet("/api/recognition/capabilities", (IOptions<RecognitionOptions> option
 {
     var value = options.Value;
 
-    return Results.Ok(new RecognitionCapabilitiesResponse(
+    return Results.Ok(new RecognitionCapabilitiesDto(
         value.SupportsLocalInference,
         value.SupportsServerInference,
         value.SupportsImageExport,
@@ -44,11 +49,11 @@ app.MapGet("/api/recognition/modes", (IOptions<RecognitionOptions> options) =>
 {
     var value = options.Value;
 
-    var modes = new List<RecognitionModeResponse>
+    var modes = new List<RecognitionModeDto>
     {
-        new("auto", "Auto", true),
-        new("local", "本地识别", value.SupportsLocalInference),
-        new("server", "服务器识别", value.SupportsServerInference)
+        new(RecognitionModes.Auto, "自动选择", true),
+        new(RecognitionModes.Local, "本地识别", value.SupportsLocalInference),
+        new(RecognitionModes.Server, "服务器识别", value.SupportsServerInference)
     };
 
     return Results.Ok(modes);
@@ -57,31 +62,60 @@ app.MapGet("/api/recognition/modes", (IOptions<RecognitionOptions> options) =>
 app.MapPost("/api/recognition/jobs", (RecognitionJobRequest request, IOptions<RecognitionOptions> options) =>
 {
     var value = options.Value;
-    var normalizedMode = string.IsNullOrWhiteSpace(request.Mode) ? value.DefaultMode : request.Mode.Trim().ToLowerInvariant();
+    var normalizedMode = RecognitionModes.Normalize(request.Mode);
 
     var acceptedMode = normalizedMode switch
     {
-        "local" when value.SupportsLocalInference => "local",
-        "server" when value.SupportsServerInference => "server",
+        RecognitionModes.Local when value.SupportsLocalInference => RecognitionModes.Local,
+        RecognitionModes.Server when value.SupportsServerInference => RecognitionModes.Server,
         _ => value.DefaultMode
     };
 
     var message = acceptedMode switch
     {
-        "local" => "已接受本地识别任务占位请求，等待浏览器端推理接入。",
-        "server" => "已接受服务器识别任务占位请求，等待 TensorFlow.NET 推理服务接入。",
+        RecognitionModes.Local => "已接受本地识别任务占位请求，等待浏览器端推理接入。",
+        RecognitionModes.Server => "已接受服务器识别任务占位请求，等待基于 ONNX 的服务器端推理服务接入。",
         _ => "已接受 Auto 模式任务，占位逻辑将按能力自动选择执行路径。"
     };
 
     return Results.Accepted($"/api/recognition/jobs/{Guid.NewGuid():N}", new RecognitionJobResponse(
         $"job-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}",
         acceptedMode,
-        "queued",
+        RecognitionJobStatuses.Queued,
         message,
         request.ImageCount,
         request.VideoCount,
         request.TotalBytes));
 });
+
+app.MapPost("/api/recognition/server-detect", async (
+    IFormFile image,
+    OnnxRecognitionService inferenceService,
+    IOptions<OnnxRecognitionOptions> options,
+    CancellationToken cancellationToken) =>
+{
+    var settings = options.Value;
+
+    if (image.Length == 0)
+    {
+        return Results.BadRequest("图片文件不能为空。");
+    }
+
+    if (image.Length > settings.MaxUploadBytes)
+    {
+        return Results.BadRequest($"图片大小不能超过 {settings.MaxUploadBytes / 1024 / 1024} MB。");
+    }
+
+    if (string.IsNullOrWhiteSpace(image.ContentType) || !image.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.BadRequest("仅支持图片文件。");
+    }
+
+    await using var stream = image.OpenReadStream();
+    var result = await inferenceService.RunSingleImageAsync(stream, image.FileName, cancellationToken);
+    return Results.Ok(result);
+})
+.DisableAntiforgery();
 
 app.MapDefaultEndpoints();
 
@@ -97,32 +131,7 @@ sealed class RecognitionOptions
     public string[] Notes { get; set; } =
     [
         "当前接口为骨架占位实现。",
-        "后续将接入 TensorFlow.NET 训练和服务器推理。",
+        "后续将接入基于 ONNX 的服务器端推理链路。",
         "浏览器本地推理能力将通过前端可运行引擎补齐。"
     ];
 }
-
-sealed record RecognitionCapabilitiesResponse(
-    bool SupportsLocalInference,
-    bool SupportsServerInference,
-    bool SupportsImageExport,
-    bool SupportsVideoExport,
-    string DefaultMode,
-    string[] Notes);
-
-sealed record RecognitionModeResponse(string Value, string Label, bool Enabled);
-
-sealed record RecognitionJobRequest(
-    string Mode,
-    int ImageCount,
-    int VideoCount,
-    long TotalBytes);
-
-sealed record RecognitionJobResponse(
-    string JobId,
-    string Mode,
-    string Status,
-    string Message,
-    int ImageCount,
-    int VideoCount,
-    long TotalBytes);

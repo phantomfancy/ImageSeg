@@ -1,9 +1,10 @@
-@implements IDisposable
+@implements IAsyncDisposable
+@inject IJSRuntime JS
 @inject RecognitionWorkbenchState Workbench
 
 <h1>执行检测</h1>
 <p class="page-intro">
-    选择处理方式并开始识别。导入与采集步骤中准备好的图片、视频和摄像头输入会在这里继续使用。
+    选择处理方式并开始识别。当前阶段优先提供浏览器端单图识别闭环，服务器识别仍保留任务接口。
 </p>
 
 <div class="workspace-grid">
@@ -13,30 +14,46 @@
             <span>图片数量：@Workbench.ImageCount</span>
             <span>视频数量：@Workbench.VideoCount</span>
             <span>总输入大小：@RecognitionWorkbenchState.FormatBytes(Workbench.TotalImageBytes + Workbench.TotalVideoBytes)</span>
+            <span>当前执行模式：@ModeLabel</span>
         </div>
+
+        @if (Workbench.CurrentImage is not null)
+        {
+            <p class="meta">当前用于本地识别的图片：@Workbench.CurrentImage.Name</p>
+        }
     </section>
 
     <section class="panel">
         <h2>检测模式</h2>
-        <p class="meta">根据任务规模、处理速度和可用资源选择合适的处理方式。</p>
+        <p class="meta">自动模式会优先选择浏览器本地识别，服务器模式当前仅保留任务提交流程。</p>
         <select class="form-select mode-select" @bind="Workbench.SelectedMode">
-            @foreach (var option in Workbench.RecognitionModes)
+            @foreach (var option in Workbench.AvailableRecognitionModes)
             {
-                <option value="@option.Value">@option.Label</option>
+                <option value="@option.Value" disabled="@(!option.Enabled)">@option.Label</option>
             }
         </select>
+
+        @if (Workbench.Capabilities?.Notes?.Count > 0)
+        {
+            <ul class="capability-notes">
+                @foreach (var note in Workbench.Capabilities.Notes)
+                {
+                    <li>@note</li>
+                }
+            </ul>
+        }
     </section>
 </div>
 
 <section class="panel panel--wide">
     <div class="panel__row">
         <div>
-            <h2>任务提交</h2>
-            <p class="meta">确认输入源和处理方式后，提交识别任务并等待结果返回。</p>
+            <h2>任务执行</h2>
+            <p class="meta">@ExecutionHint</p>
         </div>
         <button class="btn btn-dark"
-                @onclick="Workbench.SubmitRecognitionAsync"
-                disabled="@(!Workbench.Images.Any() && !Workbench.Videos.Any() || Workbench.Submitting)">
+                @onclick="HandleDetectionAsync"
+                disabled="@(!CanSubmit)">
             @Workbench.SubmitButtonText
         </button>
     </div>
@@ -58,17 +75,87 @@
 </section>
 
 @code {
-    protected override void OnInitialized()
+    private IJSObjectReference? _module;
+
+    private string ModeLabel => Workbench.EffectiveMode switch
+    {
+        RecognitionModes.Local => "本地识别",
+        RecognitionModes.Server => "服务器识别",
+        _ => "自动选择"
+    };
+
+    private string ExecutionHint => Workbench.EffectiveMode == RecognitionModes.Server
+        ? "服务器模式当前支持单图上传到 ApiService，由 C# + ONNX Runtime 执行推理。"
+        : "本地模式将直接在浏览器中加载 ONNX 模型，对当前图片执行单图识别并输出结果图。";
+
+    private bool CanSubmit =>
+        !Workbench.Processing &&
+        (
+            Workbench.EffectiveMode == RecognitionModes.Server
+                ? Workbench.ImageCount > 0 || Workbench.VideoCount > 0
+                : Workbench.CurrentImage is not null
+        );
+
+    protected override async Task OnInitializedAsync()
     {
         Workbench.Changed += HandleStateChanged;
+        await Workbench.InitializeAsync();
+    }
+
+    private async Task HandleDetectionAsync()
+    {
+        if (Workbench.EffectiveMode == RecognitionModes.Server)
+        {
+            await Workbench.SubmitServerRecognitionAsync();
+            return;
+        }
+
+        if (Workbench.CurrentImage is null)
+        {
+            Workbench.FailProcessing("请先选择待识别的图片。");
+            return;
+        }
+
+        try
+        {
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "/js/detect.js");
+            Workbench.BeginProcessing("正在浏览器端加载模型并执行单图识别...");
+
+            var response = await _module.InvokeAsync<BrowserDetectionResponse>(
+                "runSingleImageDetection",
+                Workbench.CurrentImage.DataUrl,
+                Workbench.CurrentImage.Name,
+                Workbench.EffectiveMode);
+
+            if (response?.Result is null || string.IsNullOrWhiteSpace(response.AnnotatedImageDataUrl))
+            {
+                Workbench.FailProcessing("本地识别未返回有效结果。");
+                return;
+            }
+
+            Workbench.CompleteLocalRecognition(response.Result, response.AnnotatedImageDataUrl);
+        }
+        catch (Exception ex)
+        {
+            Workbench.FailProcessing($"本地识别失败：{ex.Message}");
+        }
     }
 
     private void HandleStateChanged() => InvokeAsync(StateHasChanged);
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         Workbench.Changed -= HandleStateChanged;
+
+        if (_module is not null)
+        {
+            await _module.DisposeAsync();
+        }
     }
+
+    private sealed record BrowserDetectionResponse(
+        string AnnotatedImageDataUrl,
+        RecognitionResultDto Result);
 }
 
 <style>
@@ -94,6 +181,16 @@
         margin-top: 1rem;
         background: rgba(12, 110, 122, 0.12);
         color: #124c57;
+    }
+
+    .capability-notes {
+        margin: 1rem 0 0;
+        padding-left: 1.1rem;
+        color: #5f6f72;
+    }
+
+    .capability-notes li + li {
+        margin-top: 0.45rem;
     }
 
     @@media (max-width: 640px) {

@@ -58,4 +58,25 @@ public class WebTests
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
+
+    [Fact]
+    public async Task GetRecognitionCapabilitiesFromWebFrontendReturnsOkStatusCode()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        var appHost = await DistributedApplicationTestingBuilder.CreateAsync<Projects._4CImageSeg_AppHost>(cancellationToken);
+        appHost.Services.ConfigureHttpClientDefaults(clientBuilder =>
+        {
+            clientBuilder.AddStandardResilienceHandler();
+        });
+
+        await using var app = await appHost.BuildAsync(cancellationToken).WaitAsync(DefaultTimeout, cancellationToken);
+        await app.StartAsync(cancellationToken).WaitAsync(DefaultTimeout, cancellationToken);
+
+        var httpClient = app.CreateHttpClient("webfrontend");
+        await app.ResourceNotifications.WaitForResourceHealthyAsync("webfrontend", cancellationToken).WaitAsync(DefaultTimeout, cancellationToken);
+        var response = await httpClient.GetAsync("/api/recognition/capabilities", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
 }
