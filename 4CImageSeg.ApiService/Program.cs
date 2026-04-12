@@ -29,7 +29,7 @@ app.MapGet("/", () => Results.Ok(new
 {
     service = "4C-ai装备识别工具 API",
     status = "running",
-    description = "当前阶段提供识别能力和任务提交的占位接口。"
+    description = "当前提供基于 ONNX Runtime 的识别能力接口，服务器端由 Microsoft.ML.OnnxRuntime 执行推理。"
 }));
 
 app.MapGet("/api/recognition/capabilities", (IOptions<RecognitionOptions> options) =>
@@ -73,9 +73,9 @@ app.MapPost("/api/recognition/jobs", (RecognitionJobRequest request, IOptions<Re
 
     var message = acceptedMode switch
     {
-        RecognitionModes.Local => "已接受本地识别任务占位请求，等待浏览器端推理接入。",
-        RecognitionModes.Server => "已接受服务器识别任务占位请求，等待基于 ONNX 的服务器端推理服务接入。",
-        _ => "已接受 Auto 模式任务，占位逻辑将按能力自动选择执行路径。"
+        RecognitionModes.Local => "已接受本地识别请求，浏览器端将通过 onnxruntime-web 执行推理。",
+        RecognitionModes.Server => "已接受服务器识别请求，ApiService 将通过 Microsoft.ML.OnnxRuntime 执行推理。",
+        _ => "已接受 Auto 模式任务，系统将按当前能力自动选择 onnxruntime 或 onnxruntime-web 执行路径。"
     };
 
     return Results.Accepted($"/api/recognition/jobs/{Guid.NewGuid():N}", new RecognitionJobResponse(
@@ -130,8 +130,8 @@ sealed class RecognitionOptions
     public string DefaultMode { get; set; } = "auto";
     public string[] Notes { get; set; } =
     [
-        "当前接口为骨架占位实现。",
-        "后续将接入基于 ONNX 的服务器端推理链路。",
-        "浏览器本地推理能力将通过前端可运行引擎补齐。"
+        "服务器端单图识别由 ASP.NET Core + Microsoft.ML.OnnxRuntime 执行。",
+        "浏览器本地识别由 onnxruntime-web 执行，优先使用 WebGPU，失败后回退到 WASM。",
+        "当前前后端默认模型均为 onnx-community/yolo26s-ONNX 的 onnx/model_int8.onnx。"
     ];
 }

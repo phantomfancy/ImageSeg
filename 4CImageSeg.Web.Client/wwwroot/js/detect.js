@@ -1,22 +1,115 @@
-import { AutoModel, AutoProcessor, RawImage } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1";
+import * as ort from "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.3/dist/ort.webgpu.min.mjs";
 
 const modelConfig = {
-  modelId: "onnx-community/yolo26s-ONNX",
-  modelVersion: "onnx-community/yolo26s-ONNX",
+  modelUrl: "https://huggingface.co/onnx-community/yolo26s-ONNX/resolve/main/onnx/model_int8.onnx?download=true",
+  modelVersion: "https://huggingface.co/onnx-community/yolo26s-ONNX/blob/main/onnx/model_int8.onnx",
+  ortVersion: "1.24.3",
+  inputWidth: 640,
+  inputHeight: 640,
   scoreThreshold: 0.35,
   maxDetections: 20
 };
 
-let modelPromise;
-let processorPromise;
+const cocoLabels = [
+  "person",
+  "bicycle",
+  "car",
+  "motorcycle",
+  "airplane",
+  "bus",
+  "train",
+  "truck",
+  "boat",
+  "traffic light",
+  "fire hydrant",
+  "stop sign",
+  "parking meter",
+  "bench",
+  "bird",
+  "cat",
+  "dog",
+  "horse",
+  "sheep",
+  "cow",
+  "elephant",
+  "bear",
+  "zebra",
+  "giraffe",
+  "backpack",
+  "umbrella",
+  "handbag",
+  "tie",
+  "suitcase",
+  "frisbee",
+  "skis",
+  "snowboard",
+  "sports ball",
+  "kite",
+  "baseball bat",
+  "baseball glove",
+  "skateboard",
+  "surfboard",
+  "tennis racket",
+  "bottle",
+  "wine glass",
+  "cup",
+  "fork",
+  "knife",
+  "spoon",
+  "bowl",
+  "banana",
+  "apple",
+  "sandwich",
+  "orange",
+  "broccoli",
+  "carrot",
+  "hot dog",
+  "pizza",
+  "donut",
+  "cake",
+  "chair",
+  "couch",
+  "potted plant",
+  "bed",
+  "dining table",
+  "toilet",
+  "tv",
+  "laptop",
+  "mouse",
+  "remote",
+  "keyboard",
+  "cell phone",
+  "microwave",
+  "oven",
+  "toaster",
+  "sink",
+  "refrigerator",
+  "book",
+  "clock",
+  "vase",
+  "scissors",
+  "teddy bear",
+  "hair drier",
+  "toothbrush"
+];
+
+const ortDistBaseUrl = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${modelConfig.ortVersion}/dist/`;
+ort.env.wasm.wasmPaths = ortDistBaseUrl;
+
+let sessionPromise;
 
 export async function runSingleImageDetection(imageDataUrl, inputSource, mode) {
-  const [model, processor] = await Promise.all([getModel(), getProcessor()]);
+  const session = await getSession();
   const image = await loadImage(imageDataUrl);
-  const rawImage = RawImage.fromCanvas(image.canvas);
-  const inputs = await processor(rawImage);
-  const output = await model(inputs);
-  const detections = extractDetections(output, model.config.id2label, image.width, image.height);
+  const inputTensor = createInputTensor(image.canvas);
+  const inputName = session.inputNames[0];
+  const outputMap = await session.run({
+    [inputName]: inputTensor
+  });
+
+  const logits = getOutputTensor(outputMap, session.outputNames, "logits");
+  const predBoxes = getOutputTensor(outputMap, session.outputNames, "pred_boxes");
+  const detections = extractDetections(logits, predBoxes, image.width, image.height);
   const annotatedImageDataUrl = drawDetections(image.canvas, detections);
 
   return {
@@ -40,55 +133,118 @@ export async function runSingleImageDetection(imageDataUrl, inputSource, mode) {
   };
 }
 
-async function getModel() {
-  if (!modelPromise) {
-    modelPromise = AutoModel.from_pretrained(modelConfig.modelId, createModelOptions()).catch((error) => {
-      modelPromise = undefined;
+async function getSession() {
+  if (!sessionPromise) {
+    sessionPromise = createSessionWithFallback().catch((error) => {
+      sessionPromise = undefined;
       throw error;
     });
   }
 
-  return modelPromise;
+  return sessionPromise;
 }
 
-async function getProcessor() {
-  if (!processorPromise) {
-    processorPromise = AutoProcessor.from_pretrained(modelConfig.modelId).catch((error) => {
-      processorPromise = undefined;
-      throw error;
-    });
+async function createSessionWithFallback() {
+  const errors = [];
+
+  for (const provider of getExecutionProviders()) {
+    try {
+      return await ort.InferenceSession.create(modelConfig.modelUrl, {
+        executionProviders: [provider]
+      });
+    } catch (error) {
+      errors.push(`${provider}：${formatErrorMessage(error)}`);
+    }
   }
 
-  return processorPromise;
+  throw new Error(`无法通过 ONNX Runtime Web 加载模型 ${modelConfig.modelVersion}。${errors.join("；")}`);
 }
 
-function createModelOptions() {
-  if (navigator.gpu) {
-    return {
-      device: "webgpu",
-      dtype: "fp32"
-    };
+function getExecutionProviders() {
+  const providers = [];
+
+  if (typeof navigator !== "undefined" && "gpu" in navigator) {
+    providers.push("webgpu");
   }
 
-  // 在非 WebGPU 浏览器中，Transformers.js 默认走 CPU/WASM。
-  return {
-    dtype: "q8"
-  };
+  providers.push("wasm");
+  return providers;
 }
 
-function extractDetections(output, id2label, imageWidth, imageHeight) {
-  const scores = output.logits.sigmoid().data;
-  const boxes = output.pred_boxes.data;
+function getOutputTensor(outputMap, outputNames, expectedName) {
+  const exactName = outputNames.find((item) => item.toLowerCase() === expectedName.toLowerCase());
+  if (exactName && outputMap[exactName]) {
+    return outputMap[exactName];
+  }
+
+  const partialName = outputNames.find((item) => item.toLowerCase().includes(expectedName.toLowerCase()));
+  if (partialName && outputMap[partialName]) {
+    return outputMap[partialName];
+  }
+
+  throw new Error(`模型输出中未找到 ${expectedName}。`);
+}
+
+function createInputTensor(sourceCanvas) {
+  const canvas = document.createElement("canvas");
+  canvas.width = modelConfig.inputWidth;
+  canvas.height = modelConfig.inputHeight;
+
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("浏览器不支持 Canvas 2D。");
+  }
+
+  context.drawImage(sourceCanvas, 0, 0, modelConfig.inputWidth, modelConfig.inputHeight);
+  const { data } = context.getImageData(0, 0, modelConfig.inputWidth, modelConfig.inputHeight);
+  const tensorData = new Float32Array(1 * 3 * modelConfig.inputHeight * modelConfig.inputWidth);
+  const channelSize = modelConfig.inputHeight * modelConfig.inputWidth;
+
+  for (let index = 0; index < channelSize; index += 1) {
+    const pixelOffset = index * 4;
+    tensorData[index] = data[pixelOffset] / 255;
+    tensorData[channelSize + index] = data[pixelOffset + 1] / 255;
+    tensorData[channelSize * 2 + index] = data[pixelOffset + 2] / 255;
+  }
+
+  return new ort.Tensor("float32", tensorData, [1, 3, modelConfig.inputHeight, modelConfig.inputWidth]);
+}
+
+function extractDetections(logits, predBoxes, imageWidth, imageHeight) {
+  validateTensor(logits, "logits");
+  validateTensor(predBoxes, "pred_boxes");
+  validateBoxDimensions(predBoxes.dims);
+
+  const scores = logits.data;
+  const boxes = predBoxes.data;
+  const queryCount = resolveQueryCount(logits.dims, predBoxes.dims, boxes.length);
+  const classCountWithNoObject = resolveClassCount(logits.dims, scores.length, queryCount);
+  const classCount = Math.max(1, classCountWithNoObject - 1);
   const detections = [];
 
-  for (let index = 0; index < 300; index += 1) {
-    let bestScore = 0;
-    let bestClassId = 0;
+  for (let queryIndex = 0; queryIndex < queryCount; queryIndex += 1) {
+    let maxLogit = Number.NEGATIVE_INFINITY;
+    for (let classIndex = 0; classIndex < classCountWithNoObject; classIndex += 1) {
+      const current = scores[queryIndex * classCountWithNoObject + classIndex];
+      if (current > maxLogit) {
+        maxLogit = current;
+      }
+    }
 
-    for (let classIndex = 0; classIndex < 80; classIndex += 1) {
-      const score = scores[index * 80 + classIndex];
-      if (score > bestScore) {
-        bestScore = score;
+    let sum = 0;
+    const normalizedScores = new Float32Array(classCountWithNoObject);
+    for (let classIndex = 0; classIndex < classCountWithNoObject; classIndex += 1) {
+      const value = Math.exp(scores[queryIndex * classCountWithNoObject + classIndex] - maxLogit);
+      normalizedScores[classIndex] = value;
+      sum += value;
+    }
+
+    let bestClassId = 0;
+    let bestScore = 0;
+    for (let classIndex = 0; classIndex < classCount; classIndex += 1) {
+      const probability = normalizedScores[classIndex] / sum;
+      if (probability > bestScore) {
+        bestScore = probability;
         bestClassId = classIndex;
       }
     }
@@ -97,10 +253,10 @@ function extractDetections(output, id2label, imageWidth, imageHeight) {
       continue;
     }
 
-    const cx = boxes[index * 4];
-    const cy = boxes[index * 4 + 1];
-    const width = boxes[index * 4 + 2];
-    const height = boxes[index * 4 + 3];
+    const cx = boxes[queryIndex * 4];
+    const cy = boxes[queryIndex * 4 + 1];
+    const width = boxes[queryIndex * 4 + 2];
+    const height = boxes[queryIndex * 4 + 3];
 
     const left = clamp((cx - width / 2) * imageWidth, 0, imageWidth);
     const top = clamp((cy - height / 2) * imageHeight, 0, imageHeight);
@@ -108,7 +264,7 @@ function extractDetections(output, id2label, imageWidth, imageHeight) {
     const bottom = clamp((cy + height / 2) * imageHeight, 0, imageHeight);
 
     detections.push({
-      label: id2label?.[bestClassId] ?? `Class ${bestClassId}`,
+      label: cocoLabels[bestClassId] ?? `class-${bestClassId}`,
       confidence: bestScore,
       box: {
         x: left,
@@ -124,12 +280,60 @@ function extractDetections(output, id2label, imageWidth, imageHeight) {
     .slice(0, modelConfig.maxDetections);
 }
 
+function validateTensor(tensor, name) {
+  if (!tensor?.data || !Array.isArray(tensor?.dims)) {
+    throw new Error(`模型输出缺少 ${name}。`);
+  }
+}
+
+function validateBoxDimensions(boxDims) {
+  const boxSize = boxDims.length > 0 ? boxDims[boxDims.length - 1] : undefined;
+  if (boxSize !== undefined && boxSize !== 4) {
+    throw new Error(`pred_boxes 维度异常：${boxDims.join("x")}。`);
+  }
+}
+
+function resolveQueryCount(scoreDims, boxDims, boxLength) {
+  const queryCountFromScores = scoreDims.length >= 2 ? scoreDims[scoreDims.length - 2] : undefined;
+  const queryCountFromBoxes = boxDims.length >= 2 ? boxDims[boxDims.length - 2] : undefined;
+
+  if (
+    Number.isInteger(queryCountFromScores) &&
+    Number.isInteger(queryCountFromBoxes) &&
+    queryCountFromScores !== queryCountFromBoxes
+  ) {
+    throw new Error(`模型输出维度不一致：logits=${scoreDims.join("x")}，pred_boxes=${boxDims.join("x")}。`);
+  }
+
+  const queryCount = queryCountFromBoxes ?? queryCountFromScores ?? Math.floor(boxLength / 4);
+  if (!Number.isInteger(queryCount) || queryCount <= 0) {
+    throw new Error("无法从模型输出中解析候选框数量。");
+  }
+
+  return queryCount;
+}
+
+function resolveClassCount(scoreDims, scoreLength, queryCount) {
+  const classCountFromDims = scoreDims.length > 0 ? scoreDims[scoreDims.length - 1] : undefined;
+  const classCount = classCountFromDims ?? Math.floor(scoreLength / queryCount);
+
+  if (!Number.isInteger(classCount) || classCount <= 0) {
+    throw new Error("无法从模型输出中解析类别数量。");
+  }
+
+  return classCount;
+}
+
 function drawDetections(sourceCanvas, detections) {
   const canvas = document.createElement("canvas");
   canvas.width = sourceCanvas.width;
   canvas.height = sourceCanvas.height;
 
   const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("浏览器不支持 Canvas 2D。");
+  }
+
   context.drawImage(sourceCanvas, 0, 0);
   context.lineWidth = 3;
   context.font = "16px 'Segoe UI', sans-serif";
@@ -164,17 +368,26 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
+function formatErrorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function loadImage(dataUrl) {
   const image = new Image();
   image.decoding = "async";
-  image.src = dataUrl;
+
+  await new Promise((resolve, reject) => {
+    image.onload = resolve;
+    image.onerror = () => reject(new Error("无法加载待识别图片。"));
+    image.src = dataUrl;
+  });
+
   if (typeof image.decode === "function") {
-    await image.decode();
-  } else {
-    await new Promise((resolve, reject) => {
-      image.onload = resolve;
-      image.onerror = () => reject(new Error("无法加载待识别图片。"));
-    });
+    try {
+      await image.decode();
+    } catch {
+      // 某些浏览器在图片已可用时会抛出解码异常，此时直接使用已加载图像即可。
+    }
   }
 
   const canvas = document.createElement("canvas");
@@ -182,6 +395,10 @@ async function loadImage(dataUrl) {
   canvas.height = image.naturalHeight || image.height;
 
   const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("浏览器不支持 Canvas 2D。");
+  }
+
   context.drawImage(image, 0, 0);
 
   return {
