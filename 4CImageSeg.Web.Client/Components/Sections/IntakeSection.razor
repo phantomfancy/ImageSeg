@@ -35,7 +35,7 @@
 
     <section class="panel">
         <h2>视频导入</h2>
-        <InputFile OnChange="Workbench.HandleVideosSelected" accept="video/*" multiple />
+        <InputFile OnChange="Workbench.HandleVideosSelectedAsync" accept="video/*" multiple />
         <p class="meta">已选 @Workbench.VideoCount 个视频，总大小 @RecognitionWorkbenchState.FormatBytes(Workbench.TotalVideoBytes)</p>
 
         @if (Workbench.Videos.Count > 0)
@@ -47,6 +47,11 @@
                 }
             </ul>
         }
+
+        @if (Workbench.CurrentVideo is not null)
+        {
+            <p class="meta">当前阶段的本地实时推理将默认使用视频：@Workbench.CurrentVideo.Name</p>
+        }
     </section>
 </div>
 
@@ -54,13 +59,13 @@
     <div class="panel__row">
         <div>
             <h2>摄像头视频流</h2>
-            <p class="meta">用于实时预览和后续实时检测。</p>
+            <p class="meta">用于实时预览，并可在执行检测页面直接启动本地实时识别。</p>
         </div>
         <button class="btn btn-outline-dark btn-sm" @onclick="RefreshDevicesAsync">刷新设备</button>
     </div>
 
     <label class="form-label" for="camera-device">当前设备</label>
-    <select id="camera-device" class="form-select" @bind="_selectedDeviceId">
+    <select id="camera-device" class="form-select" @bind="Workbench.PreferredCameraDeviceId">
         <option value="">默认摄像头</option>
         @foreach (var device in _devices)
         {
@@ -142,7 +147,6 @@
     private readonly List<CalibrationProfile> _savedProfiles = [];
     private ElementReference _videoElement;
     private IJSObjectReference? _module;
-    private string _selectedDeviceId = string.Empty;
     private string _cameraStatusMessage = "尚未初始化摄像头。";
     private CalibrationProfile _calibrationModel = new("默认相机", 9, 6, 25);
     private int _calibrationImageCount;
@@ -170,8 +174,8 @@
         try
         {
             _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "/js/camera.js");
-            await _module.InvokeVoidAsync("startPreview", _videoElement, _selectedDeviceId);
-            _cameraStatusMessage = string.IsNullOrWhiteSpace(_selectedDeviceId)
+            await _module.InvokeVoidAsync("startPreview", _videoElement, Workbench.PreferredCameraDeviceId);
+            _cameraStatusMessage = string.IsNullOrWhiteSpace(Workbench.PreferredCameraDeviceId)
                 ? "已启动默认摄像头预览。"
                 : "已启动指定摄像头预览。";
         }

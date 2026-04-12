@@ -6,7 +6,9 @@ namespace _4CImageSeg.Web.Client.Services;
 public sealed class RecognitionWorkbenchState(RecognitionApiClient apiClient)
 {
     private const long MaxImageBytes = 15 * 1024 * 1024;
+    private const long MaxVideoBytes = 128L * 1024 * 1024;
     private const long MaxModelBytes = 256L * 1024 * 1024;
+    private const int DefaultMaxDetections = 5;
     private const string DefaultLocalModelUrl = "/models/yolo26s/model_int8.onnx";
     private const string DefaultLocalModelVersion = "builtin:/models/yolo26s/model_int8.onnx";
     private const string DefaultLocalModelDisplayName = "内置模型 yolo26s / model_int8.onnx";
@@ -21,6 +23,9 @@ public sealed class RecognitionWorkbenchState(RecognitionApiClient apiClient)
     ];
 
     private string _selectedMode = RecognitionModes.Auto;
+    private string _selectedLocalInputKind = LocalInputKinds.Image;
+    private string _preferredCameraDeviceId = string.Empty;
+    private int _maxDetections = DefaultMaxDetections;
     private string _localModelSourceType = LocalModelSourceTypes.Default;
     private string _customLocalModelUrl = string.Empty;
     private ImportedLocalModel? _importedLocalModel;
@@ -34,6 +39,7 @@ public sealed class RecognitionWorkbenchState(RecognitionApiClient apiClient)
     public IReadOnlyList<RecognitionModeDto> AvailableRecognitionModes => _recognitionModes;
     public RecognitionCapabilitiesDto? Capabilities { get; private set; }
     public SelectedImageAsset? CurrentImage { get; private set; }
+    public SelectedVideoAsset? CurrentVideo { get; private set; }
     public RecognitionJobResponse? LastJob { get; private set; }
     public RecognitionResultDto? LastResult { get; private set; }
     public string? AnnotatedImageDataUrl { get; private set; }
@@ -41,6 +47,7 @@ public sealed class RecognitionWorkbenchState(RecognitionApiClient apiClient)
     public string LocalModelNotice => _localModelNotice;
     public string StatusMessage { get; private set; } = "请先准备输入源，再开始检测。";
     public bool Processing { get; private set; }
+    public bool RealtimeDetectionActive { get; private set; }
 
     public string SelectedMode
     {
@@ -61,6 +68,24 @@ public sealed class RecognitionWorkbenchState(RecognitionApiClient apiClient)
     {
         get => _localModelSourceType;
         set => SetLocalModelSourceType(value);
+    }
+
+    public string SelectedLocalInputKind
+    {
+        get => _selectedLocalInputKind;
+        set => SetSelectedLocalInputKind(value);
+    }
+
+    public string PreferredCameraDeviceId
+    {
+        get => _preferredCameraDeviceId;
+        set => SetPreferredCameraDeviceId(value);
+    }
+
+    public int MaxDetections
+    {
+        get => _maxDetections;
+        set => SetMaxDetections(value);
     }
 
     public string CustomLocalModelUrl
@@ -204,6 +229,50 @@ public sealed class RecognitionWorkbenchState(RecognitionApiClient apiClient)
         NotifyStateChanged();
     }
 
+    public async Task HandleVideosSelectedAsync(InputFileChangeEventArgs args)
+    {
+        _videos.Clear();
+
+        var files = args.GetMultipleFiles(16);
+        _videos.AddRange(files.Select(file => new FileDescriptor(file.Name, file.ContentType, file.Size)));
+
+        CurrentVideo = null;
+        ClearRecognitionOutputCore();
+
+        if (files.Count == 0)
+        {
+            StatusMessage = "尚未选择视频。";
+            NotifyStateChanged();
+            return;
+        }
+
+        var firstVideo = files[0];
+
+        try
+        {
+            await using var stream = firstVideo.OpenReadStream(MaxVideoBytes);
+            using var memory = new MemoryStream();
+            await stream.CopyToAsync(memory);
+
+            CurrentVideo = new SelectedVideoAsset(
+                firstVideo.Name,
+                firstVideo.ContentType,
+                firstVideo.Size,
+                memory.ToArray());
+
+            StatusMessage = files.Count > 1
+                ? $"已选择 {files.Count} 个视频。当前阶段先使用第 1 个视频进行本地逐帧识别。"
+                : "已选择 1 个视频，可直接开始本地逐帧识别。";
+        }
+        catch (Exception ex)
+        {
+            CurrentVideo = null;
+            StatusMessage = $"读取视频失败：{ex.Message}";
+        }
+
+        NotifyStateChanged();
+    }
+
     public async Task HandleLocalModelSelectedAsync(InputFileChangeEventArgs args)
     {
         var modelFile = args.GetMultipleFiles(1).FirstOrDefault();
@@ -249,16 +318,40 @@ public sealed class RecognitionWorkbenchState(RecognitionApiClient apiClient)
         NotifyStateChanged();
     }
 
-    public void HandleVideosSelected(InputFileChangeEventArgs args)
+    public void SetSelectedLocalInputKind(string? value)
     {
-        _videos.Clear();
-        _videos.AddRange(args.GetMultipleFiles(16).Select(file => new FileDescriptor(file.Name, file.ContentType, file.Size)));
+        var normalized = LocalInputKinds.Normalize(value);
+        if (_selectedLocalInputKind == normalized)
+        {
+            return;
+        }
+
+        _selectedLocalInputKind = normalized;
+        NotifyStateChanged();
+    }
+
+    public void SetPreferredCameraDeviceId(string? value)
+    {
+        var normalized = value?.Trim() ?? string.Empty;
+        if (string.Equals(_preferredCameraDeviceId, normalized, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _preferredCameraDeviceId = normalized;
+        NotifyStateChanged();
+    }
+
+    public void SetMaxDetections(int? value)
+    {
+        var normalized = Math.Clamp(value ?? DefaultMaxDetections, 1, 50);
+        if (_maxDetections == normalized)
+        {
+            return;
+        }
+
+        _maxDetections = normalized;
         ClearRecognitionOutputCore();
-
-        StatusMessage = _videos.Count == 0
-            ? "尚未选择视频。"
-            : $"已选择 {_videos.Count} 个视频。当前阶段暂未提供视频识别，仅保留输入信息。";
-
         NotifyStateChanged();
     }
 
@@ -293,6 +386,15 @@ public sealed class RecognitionWorkbenchState(RecognitionApiClient apiClient)
     public void BeginProcessing(string message)
     {
         Processing = true;
+        RealtimeDetectionActive = false;
+        StatusMessage = message;
+        NotifyStateChanged();
+    }
+
+    public void BeginRealtimeDetection(string message)
+    {
+        Processing = false;
+        RealtimeDetectionActive = true;
         StatusMessage = message;
         NotifyStateChanged();
     }
@@ -311,8 +413,9 @@ public sealed class RecognitionWorkbenchState(RecognitionApiClient apiClient)
         LastResult = result;
         AnnotatedImageDataUrl = annotatedImageDataUrl;
         Processing = false;
+        RealtimeDetectionActive = false;
         StatusMessage = result.Detections.Count == 0
-            ? "识别完成，当前图片未检测到目标。"
+            ? "识别完成，当前输入未检测到目标。"
             : $"识别完成，共检测到 {result.Detections.Count} 个目标。";
 
         NotifyStateChanged();
@@ -321,6 +424,7 @@ public sealed class RecognitionWorkbenchState(RecognitionApiClient apiClient)
     public void FailProcessing(string message)
     {
         Processing = false;
+        RealtimeDetectionActive = false;
         StatusMessage = message;
         NotifyStateChanged();
     }
@@ -461,6 +565,27 @@ public sealed record SelectedImageAsset(
     string ContentType,
     long Size,
     string DataUrl);
+
+public sealed record SelectedVideoAsset(
+    string Name,
+    string ContentType,
+    long Size,
+    byte[] Bytes);
+
+public static class LocalInputKinds
+{
+    public const string Image = "image";
+    public const string Video = "video";
+    public const string Camera = "camera";
+
+    public static string Normalize(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            Video => Video,
+            Camera => Camera,
+            _ => Image
+        };
+}
 
 public static class LocalModelSourceTypes
 {

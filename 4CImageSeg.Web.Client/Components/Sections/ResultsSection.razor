@@ -23,7 +23,7 @@
                 <strong>@CurrentResultState</strong>
             </div>
         </div>
-        <p class="meta">本地识别完成后，结果图会直接显示在下方，并可导出结果图或 JSON。</p>
+        <p class="meta">本地识别完成后，结果图或实时识别的最后一帧会直接显示在下方，并可导出结果图或 JSON。</p>
     </section>
 
     <section class="panel">
@@ -56,7 +56,7 @@
         <div class="panel__row">
             <div>
                 <h2>结果图</h2>
-                <p class="meta">当前显示的是浏览器端推理后的结果图。</p>
+                <p class="meta">当前显示的是浏览器端推理后的结果图，视频/摄像头模式下为停止时保存的最后一帧。</p>
             </div>
             @if (Workbench.LastResult is not null)
             {
@@ -76,7 +76,7 @@
 
         @if (Workbench.LastResult.Detections.Count == 0)
         {
-            <p class="meta">当前图片未检测到目标。</p>
+            <p class="meta">当前输入未检测到目标。</p>
         }
         else
         {

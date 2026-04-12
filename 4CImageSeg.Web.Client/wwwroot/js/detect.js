@@ -5,7 +5,7 @@ const runtimeConfig = {
   inputWidth: 640,
   inputHeight: 640,
   scoreThreshold: 0.35,
-  maxDetections: 20
+  defaultMaxDetections: 5
 };
 
 const defaultModelConfig = {
@@ -102,76 +102,452 @@ const cocoLabels = [
 
 const ortDistBaseUrl = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${runtimeConfig.ortVersion}/dist/`;
 ort.env.wasm.wasmPaths = ortDistBaseUrl;
-ort.env.wasm.numThreads = 1;
+ort.env.wasm.numThreads = 0;
 ort.env.wasm.proxy = false;
 
-let sessionPromise;
+if (ort.env.webgpu) {
+  ort.env.webgpu.powerPreference = "high-performance";
+}
+
+let sessionStatePromise;
 let sessionCacheKey;
+let sessionModelOptions;
+let realtimeState;
 
-export async function runSingleImageDetection(imageDataUrl, inputSource, mode, modelOptions) {
+export async function listVideoDevices() {
+  const devices = await navigator.mediaDevices.enumerateDevices();
+
+  return devices
+    .filter((device) => device.kind === "videoinput")
+    .map((device, index) => ({
+      deviceId: device.deviceId,
+      label: device.label || `摄像头 ${index + 1}`
+    }));
+}
+
+export async function runSingleImageDetection(imageDataUrl, inputSource, mode, modelOptions, runtimeOptions) {
   const resolvedModel = resolveModelOptions(modelOptions);
-  const session = await getSession(resolvedModel);
+  const resolvedRuntime = resolveRuntimeOptions(runtimeOptions);
+  const sessionState = await getSessionState(resolvedModel);
   const image = await loadImage(imageDataUrl);
-  const inputTensor = createInputTensor(image.canvas);
-  const inputName = session.inputNames[0];
-  const outputMap = await session.run({
-    [inputName]: inputTensor
-  });
-
-  const logits = getOutputTensor(outputMap, session.outputNames, "logits");
-  const predBoxes = getOutputTensor(outputMap, session.outputNames, "pred_boxes");
-  const detections = extractDetections(logits, predBoxes, image.width, image.height);
+  const owner = {
+    sessionState,
+    runtimeOptions: resolvedRuntime,
+    inferenceBuffers: createInferenceBuffers()
+  };
+  const detections = await runDetectionOnCanvas(owner, image.canvas, image.width, image.height, resolvedRuntime);
   const annotatedImageDataUrl = drawDetections(image.canvas, detections);
 
   return {
     annotatedImageDataUrl,
-    result: {
-      inputSource,
-      mode,
-      modelVersion: resolvedModel.modelVersion,
-      detectedAtUtc: new Date().toISOString(),
-      detections: detections.map((item) => ({
-        label: item.label,
-        confidence: item.confidence,
-        box: {
-          x: item.box.x,
-          y: item.box.y,
-          width: item.box.width,
-          height: item.box.height
-        }
-      }))
-    }
+    executionProvider: owner.sessionState.providerName,
+    result: buildRecognitionResult(inputSource, mode, resolvedModel.modelVersion, detections)
   };
 }
 
-async function getSession(modelOptions) {
-  if (!sessionPromise || sessionCacheKey !== modelOptions.cacheKey) {
+export async function startRealtimeDetection(videoElement, previewCanvas, request) {
+  await disposeRealtimeDetection(videoElement, previewCanvas);
+
+  const sourceKind = normalizeSourceKind(request?.sourceKind);
+  const resolvedModel = resolveModelOptions(request?.modelOptions);
+  const resolvedRuntime = resolveRuntimeOptions(request?.runtimeOptions);
+  const sessionState = await getSessionState(resolvedModel);
+
+  const state = {
+    sourceKind,
+    inputSource: normalizeDisplayName(request?.inputSource, sourceKind === "camera" ? "摄像头视频流" : "视频流"),
+    mode: typeof request?.mode === "string" && request.mode.length > 0 ? request.mode : "local",
+    modelVersion: resolvedModel.modelVersion,
+    sessionState,
+    runtimeOptions: resolvedRuntime,
+    videoElement,
+    previewCanvas,
+    stream: null,
+    objectUrl: null,
+    stopRequested: false,
+    completionPromise: null,
+    resolveCompletion: null,
+    inferenceBuffers: createInferenceBuffers(),
+    lastFrameCanvas: document.createElement("canvas"),
+    lastDetections: [],
+    lastResult: null,
+    lastAnnotatedImageDataUrl: null,
+    lastFrameWidth: 0,
+    lastFrameHeight: 0,
+    hasPresentedFrame: false,
+    failure: null
+  };
+
+  state.completionPromise = new Promise((resolve) => {
+    state.resolveCompletion = resolve;
+  });
+
+  realtimeState = state;
+
+  try {
+    await prepareRealtimeSource(state, request);
+    void pumpRealtimeDetection(state);
+    return {
+      providerName: state.sessionState.providerName
+    };
+  } catch (error) {
+    state.failure = error;
+    await finalizeRealtimeState(state);
+    throw error;
+  }
+}
+
+export async function stopRealtimeDetection() {
+  if (!realtimeState) {
+    return null;
+  }
+
+  const state = realtimeState;
+  state.stopRequested = true;
+  await state.completionPromise;
+
+  if (state.failure) {
+    throw state.failure;
+  }
+
+  return state.lastResult && state.lastAnnotatedImageDataUrl
+    ? {
+        annotatedImageDataUrl: state.lastAnnotatedImageDataUrl,
+        result: state.lastResult
+      }
+    : null;
+}
+
+export async function disposeRealtimeDetection(videoElement, previewCanvas) {
+  if (!realtimeState) {
+    clearCanvas(previewCanvas);
+    resetVideoElement(videoElement);
+    return;
+  }
+
+  const state = realtimeState;
+  state.stopRequested = true;
+  await state.completionPromise;
+}
+
+async function pumpRealtimeDetection(state) {
+  try {
+    while (!state.stopRequested) {
+      if (!isVideoReady(state.videoElement)) {
+        await waitForNextVisualFrame();
+        continue;
+      }
+
+      const frameWidth = state.videoElement.videoWidth;
+      const frameHeight = state.videoElement.videoHeight;
+      if (!frameWidth || !frameHeight) {
+        await waitForNextVisualFrame();
+        continue;
+      }
+
+      syncCanvasSize(state.lastFrameCanvas, frameWidth, frameHeight);
+      syncCanvasSize(state.previewCanvas, frameWidth, frameHeight);
+
+      const lastFrameContext = get2dContext(state.lastFrameCanvas, "无法获取视频帧绘制上下文。");
+      lastFrameContext.drawImage(state.videoElement, 0, 0, frameWidth, frameHeight);
+      if (!state.hasPresentedFrame) {
+        drawPreviewFrame(state.previewCanvas, state.lastFrameCanvas, []);
+      }
+
+      const detections = await runDetectionOnCanvas(state, state.lastFrameCanvas, frameWidth, frameHeight, state.runtimeOptions);
+
+      drawPreviewFrame(state.previewCanvas, state.lastFrameCanvas, detections);
+      state.hasPresentedFrame = true;
+      state.lastDetections = detections;
+      state.lastFrameWidth = frameWidth;
+      state.lastFrameHeight = frameHeight;
+      state.lastResult = buildRecognitionResult(
+        state.inputSource,
+        state.mode,
+        state.modelVersion,
+        detections);
+
+      await waitForNextVideoFrame(state.videoElement);
+    }
+  } catch (error) {
+    state.failure = error;
+    await finalizeRealtimeState(state);
+    return;
+  }
+
+  await finalizeRealtimeState(state);
+}
+
+async function finalizeRealtimeState(state) {
+  if (realtimeState === state && state.lastFrameWidth > 0 && state.lastFrameHeight > 0) {
+    state.lastAnnotatedImageDataUrl = drawDetections(state.lastFrameCanvas, state.lastDetections);
+  }
+
+  cleanupRealtimeSource(state);
+
+  if (realtimeState === state) {
+    realtimeState = null;
+  }
+
+  if (typeof state.resolveCompletion === "function") {
+    state.resolveCompletion();
+    state.resolveCompletion = null;
+  }
+}
+
+function cleanupRealtimeSource(state) {
+  if (state.stream) {
+    state.stream.getTracks().forEach((track) => track.stop());
+    state.stream = null;
+  }
+
+  if (state.objectUrl) {
+    URL.revokeObjectURL(state.objectUrl);
+    state.objectUrl = null;
+  }
+
+  resetVideoElement(state.videoElement);
+}
+
+async function prepareRealtimeSource(state, request) {
+  if (state.sourceKind === "camera") {
+    await prepareCameraStream(state, request?.cameraDeviceId);
+    return;
+  }
+
+  await prepareVideoFile(state, request?.videoBytes, request?.videoContentType);
+}
+
+async function prepareCameraStream(state, cameraDeviceId) {
+  const constraints = cameraDeviceId
+    ? { video: { deviceId: { exact: cameraDeviceId } }, audio: false }
+    : { video: true, audio: false };
+
+  state.stream = await navigator.mediaDevices.getUserMedia(constraints);
+  state.videoElement.src = "";
+  state.videoElement.srcObject = state.stream;
+  state.videoElement.muted = true;
+  state.videoElement.playsInline = true;
+  await waitForVideoReady(state.videoElement);
+  await state.videoElement.play();
+}
+
+async function prepareVideoFile(state, videoBytes, videoContentType) {
+  const bytes = normalizeBinaryBytes(videoBytes, "无法解析本地视频文件数据。");
+  if (bytes.length === 0) {
+    throw new Error("本地视频文件为空。");
+  }
+
+  const blob = new Blob([bytes], {
+    type: typeof videoContentType === "string" && videoContentType.length > 0
+      ? videoContentType
+      : "video/mp4"
+  });
+
+  state.objectUrl = URL.createObjectURL(blob);
+  state.videoElement.srcObject = null;
+  state.videoElement.src = state.objectUrl;
+  state.videoElement.muted = true;
+  state.videoElement.playsInline = true;
+  state.videoElement.loop = true;
+  await waitForVideoReady(state.videoElement);
+  await state.videoElement.play();
+}
+
+async function waitForVideoReady(videoElement) {
+  if (isVideoReady(videoElement)) {
+    return;
+  }
+
+  await new Promise((resolve, reject) => {
+    const handleCanPlay = () => {
+      cleanup();
+      resolve();
+    };
+
+    const handleLoadedMetadata = () => {
+      if (isVideoReady(videoElement)) {
+        cleanup();
+        resolve();
+      }
+    };
+
+    const handleError = () => {
+      cleanup();
+      reject(new Error("无法加载待识别视频流。"));
+    };
+
+    const cleanup = () => {
+      videoElement.removeEventListener("canplay", handleCanPlay);
+      videoElement.removeEventListener("loadedmetadata", handleLoadedMetadata);
+      videoElement.removeEventListener("error", handleError);
+    };
+
+    videoElement.addEventListener("canplay", handleCanPlay, { once: true });
+    videoElement.addEventListener("loadedmetadata", handleLoadedMetadata, { once: true });
+    videoElement.addEventListener("error", handleError, { once: true });
+  });
+}
+
+function isVideoReady(videoElement) {
+  return !!videoElement &&
+    videoElement.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
+    videoElement.videoWidth > 0 &&
+    videoElement.videoHeight > 0;
+}
+
+function resetVideoElement(videoElement) {
+  if (!videoElement) {
+    return;
+  }
+
+  videoElement.pause();
+  videoElement.srcObject = null;
+  videoElement.removeAttribute("src");
+  videoElement.load();
+}
+
+async function waitForNextVideoFrame(videoElement) {
+  if (typeof videoElement?.requestVideoFrameCallback === "function") {
+    await new Promise((resolve) => {
+      videoElement.requestVideoFrameCallback(() => resolve());
+    });
+    return;
+  }
+
+  await waitForNextVisualFrame();
+}
+
+async function waitForNextVisualFrame() {
+  await new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+}
+
+async function runDetectionOnCanvas(owner, sourceCanvas, width, height, runtimeOptions) {
+  const inputTensor = createInputTensor(sourceCanvas, owner.inferenceBuffers);
+
+  try {
+    const outputMap = await owner.sessionState.session.run({
+      [owner.sessionState.session.inputNames[0]]: inputTensor
+    });
+
+    const logits = getOutputTensor(outputMap, owner.sessionState.session.outputNames, "logits");
+    const predBoxes = getOutputTensor(outputMap, owner.sessionState.session.outputNames, "pred_boxes");
+    return extractDetections(logits, predBoxes, width, height, runtimeOptions);
+  } catch (error) {
+    if (!shouldRetryWithoutGraphCapture(owner.sessionState, error)) {
+      throw error;
+    }
+
+    owner.sessionState = await switchSessionToNonCapturedWebGpu();
+    const outputMap = await owner.sessionState.session.run({
+      [owner.sessionState.session.inputNames[0]]: inputTensor
+    });
+
+    const logits = getOutputTensor(outputMap, owner.sessionState.session.outputNames, "logits");
+    const predBoxes = getOutputTensor(outputMap, owner.sessionState.session.outputNames, "pred_boxes");
+    return extractDetections(logits, predBoxes, width, height, runtimeOptions);
+  }
+}
+
+function buildRecognitionResult(inputSource, mode, modelVersion, detections) {
+  return {
+    inputSource,
+    mode,
+    modelVersion,
+    detectedAtUtc: new Date().toISOString(),
+    detections: detections.map((item) => ({
+      label: item.label,
+      confidence: item.confidence,
+      box: {
+        x: item.box.x,
+        y: item.box.y,
+        width: item.box.width,
+        height: item.box.height
+      }
+    }))
+  };
+}
+
+async function getSessionState(modelOptions) {
+  if (!sessionStatePromise || sessionCacheKey !== modelOptions.cacheKey) {
     sessionCacheKey = modelOptions.cacheKey;
-    sessionPromise = createSessionWithFallback(modelOptions).catch((error) => {
-      sessionPromise = undefined;
+    sessionModelOptions = modelOptions;
+    sessionStatePromise = createSessionWithFallback(modelOptions).catch((error) => {
+      sessionStatePromise = undefined;
       sessionCacheKey = undefined;
+      sessionModelOptions = undefined;
       throw error;
     });
   }
 
-  return sessionPromise;
+  return sessionStatePromise;
 }
 
-async function createSessionWithFallback(modelOptions) {
+async function createSessionWithFallback(modelOptions, forceDisableGraphCapture = false) {
   const errors = [];
   const modelSource = await getModelSource(modelOptions);
 
-  for (const provider of getExecutionProviders()) {
+  for (const plan of resolveExecutionPlans(forceDisableGraphCapture)) {
     try {
-      return await ort.InferenceSession.create(modelSource, {
-        executionProviders: [provider]
-      });
+      const session = await ort.InferenceSession.create(
+        modelSource,
+        plan.sessionOptions);
+
+      return {
+        session,
+        providerName: plan.providerName,
+        graphCaptureEnabled: plan.graphCaptureEnabled === true
+      };
     } catch (error) {
-      errors.push(`${provider}：${formatErrorMessage(error)}`);
+      errors.push(`${plan.label}：${formatErrorMessage(error)}`);
     }
   }
 
   throw new Error(`无法通过 ONNX Runtime Web 加载模型 ${modelOptions.modelVersion}。${errors.join("；")}`);
+}
+
+function resolveExecutionPlans(forceDisableGraphCapture = false) {
+  const plans = [];
+
+  if (typeof navigator !== "undefined" && "gpu" in navigator && !forceDisableGraphCapture) {
+    plans.push({
+      providerName: "webgpu",
+      label: "webgpu(graph-capture)",
+      graphCaptureEnabled: true,
+      sessionOptions: {
+        executionProviders: ["webgpu"],
+        enableGraphCapture: true,
+        freeDimensionOverrides: {
+          batch: 1,
+          height: runtimeConfig.inputHeight,
+          width: runtimeConfig.inputWidth
+        }
+      }
+    });
+
+  }
+
+  if (typeof navigator !== "undefined" && "gpu" in navigator) {
+    plans.push({
+      providerName: "webgpu",
+      label: "webgpu",
+      graphCaptureEnabled: false,
+      sessionOptions: {
+        executionProviders: ["webgpu"]
+      }
+    });
+  }
+
+  plans.push({
+    providerName: "wasm",
+    label: "wasm",
+    graphCaptureEnabled: false,
+    sessionOptions: {
+      executionProviders: ["wasm"]
+    }
+  });
+
+  return plans;
 }
 
 function resolveModelOptions(modelOptions) {
@@ -192,7 +568,7 @@ function resolveModelOptions(modelOptions) {
   }
 
   if (sourceType === "file") {
-    const modelBytes = normalizeModelBytes(modelOptions?.modelBytes);
+    const modelBytes = normalizeBinaryBytes(modelOptions?.modelBytes, "无法解析本地模型文件数据。");
     return {
       cacheKey: normalizeCacheKey(modelOptions?.cacheKey, `file:${modelOptions?.displayName ?? modelBytes.length}`),
       sourceType,
@@ -208,6 +584,22 @@ function resolveModelOptions(modelOptions) {
   };
 }
 
+function resolveRuntimeOptions(runtimeOptions) {
+  const maxDetections = Number.isFinite(runtimeOptions?.maxDetections)
+    ? runtimeOptions.maxDetections
+    : runtimeConfig.defaultMaxDetections;
+
+  return {
+    maxDetections: clamp(Math.trunc(maxDetections), 1, 50)
+  };
+}
+
+function normalizeSourceKind(value) {
+  return typeof value === "string" && value.trim().toLowerCase() === "camera"
+    ? "camera"
+    : "video";
+}
+
 function normalizeCacheKey(value, fallbackValue) {
   return typeof value === "string" && value.length > 0 ? value : fallbackValue;
 }
@@ -220,35 +612,35 @@ function normalizeDisplayName(value, fallbackValue) {
   return typeof value === "string" && value.length > 0 ? value : fallbackValue;
 }
 
-function normalizeModelBytes(modelBytes) {
-  if (!modelBytes) {
+function normalizeBinaryBytes(value, errorMessage) {
+  if (!value) {
     return new Uint8Array();
   }
 
-  if (modelBytes instanceof Uint8Array) {
-    return modelBytes;
+  if (value instanceof Uint8Array) {
+    return value;
   }
 
-  if (modelBytes instanceof ArrayBuffer) {
-    return new Uint8Array(modelBytes);
+  if (value instanceof ArrayBuffer) {
+    return new Uint8Array(value);
   }
 
-  if (ArrayBuffer.isView(modelBytes)) {
-    return new Uint8Array(modelBytes.buffer.slice(
-      modelBytes.byteOffset,
-      modelBytes.byteOffset + modelBytes.byteLength
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer.slice(
+      value.byteOffset,
+      value.byteOffset + value.byteLength
     ));
   }
 
-  if (Array.isArray(modelBytes)) {
-    return Uint8Array.from(modelBytes);
+  if (Array.isArray(value)) {
+    return Uint8Array.from(value);
   }
 
-  if (typeof modelBytes.length === "number") {
-    return Uint8Array.from(modelBytes);
+  if (typeof value.length === "number") {
+    return Uint8Array.from(value);
   }
 
-  throw new Error("无法解析本地模型文件数据。");
+  throw new Error(errorMessage);
 }
 
 async function getModelSource(modelOptions) {
@@ -291,17 +683,6 @@ async function fetchModelBytes(modelUrl) {
   return new Uint8Array(buffer);
 }
 
-function getExecutionProviders() {
-  const providers = [];
-
-  if (typeof navigator !== "undefined" && "gpu" in navigator) {
-    providers.push("webgpu");
-  }
-
-  providers.push("wasm");
-  return providers;
-}
-
 function getOutputTensor(outputMap, outputNames, expectedName) {
   const exactName = outputNames.find((item) => item.toLowerCase() === expectedName.toLowerCase());
   if (exactName && outputMap[exactName]) {
@@ -316,32 +697,56 @@ function getOutputTensor(outputMap, outputNames, expectedName) {
   throw new Error(`模型输出中未找到 ${expectedName}。`);
 }
 
-function createInputTensor(sourceCanvas) {
-  const canvas = document.createElement("canvas");
-  canvas.width = runtimeConfig.inputWidth;
-  canvas.height = runtimeConfig.inputHeight;
-
-  const context = canvas.getContext("2d");
-  if (!context) {
-    throw new Error("浏览器不支持 Canvas 2D。");
-  }
-
-  context.drawImage(sourceCanvas, 0, 0, runtimeConfig.inputWidth, runtimeConfig.inputHeight);
-  const { data } = context.getImageData(0, 0, runtimeConfig.inputWidth, runtimeConfig.inputHeight);
-  const tensorData = new Float32Array(1 * 3 * runtimeConfig.inputHeight * runtimeConfig.inputWidth);
-  const channelSize = runtimeConfig.inputHeight * runtimeConfig.inputWidth;
-
-  for (let index = 0; index < channelSize; index += 1) {
-    const pixelOffset = index * 4;
-    tensorData[index] = data[pixelOffset] / 255;
-    tensorData[channelSize + index] = data[pixelOffset + 1] / 255;
-    tensorData[channelSize * 2 + index] = data[pixelOffset + 2] / 255;
-  }
-
-  return new ort.Tensor("float32", tensorData, [1, 3, runtimeConfig.inputHeight, runtimeConfig.inputWidth]);
+function createInferenceBuffers() {
+  return {
+    preprocessCanvas: document.createElement("canvas"),
+    preprocessContext: null,
+    tensorData: null,
+    inputTensor: null
+  };
 }
 
-function extractDetections(logits, predBoxes, imageWidth, imageHeight) {
+function createInputTensor(sourceCanvas, inferenceBuffers) {
+  syncCanvasSize(inferenceBuffers.preprocessCanvas, runtimeConfig.inputWidth, runtimeConfig.inputHeight);
+
+  if (!inferenceBuffers.preprocessContext) {
+    inferenceBuffers.preprocessContext = get2dContext(inferenceBuffers.preprocessCanvas, "浏览器不支持 Canvas 2D。");
+  }
+
+  inferenceBuffers.preprocessContext.drawImage(
+    sourceCanvas,
+    0,
+    0,
+    runtimeConfig.inputWidth,
+    runtimeConfig.inputHeight);
+
+  const { data } = inferenceBuffers.preprocessContext.getImageData(
+    0,
+    0,
+    runtimeConfig.inputWidth,
+    runtimeConfig.inputHeight);
+
+  const tensorLength = 3 * runtimeConfig.inputHeight * runtimeConfig.inputWidth;
+  if (!(inferenceBuffers.tensorData instanceof Float32Array) || inferenceBuffers.tensorData.length !== tensorLength) {
+    inferenceBuffers.tensorData = new Float32Array(tensorLength);
+    inferenceBuffers.inputTensor = new ort.Tensor(
+      "float32",
+      inferenceBuffers.tensorData,
+      [1, 3, runtimeConfig.inputHeight, runtimeConfig.inputWidth]);
+  }
+
+  const channelSize = runtimeConfig.inputHeight * runtimeConfig.inputWidth;
+  for (let index = 0; index < channelSize; index += 1) {
+    const pixelOffset = index * 4;
+    inferenceBuffers.tensorData[index] = data[pixelOffset] / 255;
+    inferenceBuffers.tensorData[channelSize + index] = data[pixelOffset + 1] / 255;
+    inferenceBuffers.tensorData[channelSize * 2 + index] = data[pixelOffset + 2] / 255;
+  }
+
+  return inferenceBuffers.inputTensor;
+}
+
+function extractDetections(logits, predBoxes, imageWidth, imageHeight, runtimeOptions) {
   validateTensor(logits, "logits");
   validateTensor(predBoxes, "pred_boxes");
   validateBoxDimensions(predBoxes.dims);
@@ -363,17 +768,14 @@ function extractDetections(logits, predBoxes, imageWidth, imageHeight) {
     }
 
     let sum = 0;
-    const normalizedScores = new Float32Array(classCountWithNoObject);
     for (let classIndex = 0; classIndex < classCountWithNoObject; classIndex += 1) {
-      const value = Math.exp(scores[queryIndex * classCountWithNoObject + classIndex] - maxLogit);
-      normalizedScores[classIndex] = value;
-      sum += value;
+      sum += Math.exp(scores[queryIndex * classCountWithNoObject + classIndex] - maxLogit);
     }
 
     let bestClassId = 0;
     let bestScore = 0;
     for (let classIndex = 0; classIndex < classCount; classIndex += 1) {
-      const probability = normalizedScores[classIndex] / sum;
+      const probability = Math.exp(scores[queryIndex * classCountWithNoObject + classIndex] - maxLogit) / sum;
       if (probability > bestScore) {
         bestScore = probability;
         bestClassId = classIndex;
@@ -408,7 +810,7 @@ function extractDetections(logits, predBoxes, imageWidth, imageHeight) {
 
   return detections
     .sort((left, right) => right.confidence - left.confidence)
-    .slice(0, runtimeConfig.maxDetections);
+    .slice(0, runtimeOptions.maxDetections);
 }
 
 function validateTensor(tensor, name) {
@@ -460,12 +862,25 @@ function drawDetections(sourceCanvas, detections) {
   canvas.width = sourceCanvas.width;
   canvas.height = sourceCanvas.height;
 
-  const context = canvas.getContext("2d");
-  if (!context) {
-    throw new Error("浏览器不支持 Canvas 2D。");
+  const context = get2dContext(canvas, "浏览器不支持 Canvas 2D。");
+  context.drawImage(sourceCanvas, 0, 0);
+  renderDetectionBoxes(context, detections);
+  return canvas.toDataURL("image/png");
+}
+
+function drawPreviewFrame(previewCanvas, frameCanvas, detections) {
+  if (!previewCanvas) {
+    return;
   }
 
-  context.drawImage(sourceCanvas, 0, 0);
+  syncCanvasSize(previewCanvas, frameCanvas.width, frameCanvas.height);
+  const context = get2dContext(previewCanvas, "浏览器不支持 Canvas 2D。");
+  context.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+  context.drawImage(frameCanvas, 0, 0);
+  renderDetectionBoxes(context, detections);
+}
+
+function renderDetectionBoxes(context, detections) {
   context.lineWidth = 3;
   context.font = "16px 'Segoe UI', sans-serif";
   context.textBaseline = "top";
@@ -486,13 +901,40 @@ function drawDetections(sourceCanvas, detections) {
     context.fillStyle = "#fff";
     context.fillText(label, item.box.x + 6, textY + 5);
   });
-
-  return canvas.toDataURL("image/png");
 }
 
 function pickColor(index) {
   const palette = ["#f25f5c", "#247ba0", "#70c1b3", "#ff9f1c", "#6a4c93", "#0081a7"];
   return palette[index % palette.length];
+}
+
+function clearCanvas(canvas) {
+  if (!canvas) {
+    return;
+  }
+
+  const context = canvas.getContext("2d");
+  if (context) {
+    context.clearRect(0, 0, canvas.width, canvas.height);
+  }
+}
+
+function syncCanvasSize(canvas, width, height) {
+  if (!canvas || canvas.width === width && canvas.height === height) {
+    return;
+  }
+
+  canvas.width = width;
+  canvas.height = height;
+}
+
+function get2dContext(canvas, errorMessage) {
+  const context = canvas?.getContext("2d");
+  if (!context) {
+    throw new Error(errorMessage);
+  }
+
+  return context;
 }
 
 function clamp(value, min, max) {
@@ -501,6 +943,23 @@ function clamp(value, min, max) {
 
 function formatErrorMessage(error) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function shouldRetryWithoutGraphCapture(sessionState, error) {
+  const message = formatErrorMessage(error);
+  return sessionState?.providerName === "webgpu" &&
+    sessionState?.graphCaptureEnabled === true &&
+    message.includes("External buffer must be provided");
+}
+
+async function switchSessionToNonCapturedWebGpu() {
+  if (!sessionModelOptions) {
+    throw new Error("当前会话缺少模型配置，无法切换 WebGPU 图捕获模式。");
+  }
+
+  const fallbackPromise = createSessionWithFallback(sessionModelOptions, true);
+  sessionStatePromise = fallbackPromise;
+  return await fallbackPromise;
 }
 
 async function loadImage(dataUrl) {
@@ -525,11 +984,7 @@ async function loadImage(dataUrl) {
   canvas.width = image.naturalWidth || image.width;
   canvas.height = image.naturalHeight || image.height;
 
-  const context = canvas.getContext("2d");
-  if (!context) {
-    throw new Error("浏览器不支持 Canvas 2D。");
-  }
-
+  const context = get2dContext(canvas, "浏览器不支持 Canvas 2D。");
   context.drawImage(image, 0, 0);
 
   return {

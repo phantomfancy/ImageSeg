@@ -4,7 +4,7 @@
 
 <h1>执行检测</h1>
 <p class="page-intro">
-    选择处理方式并开始识别。当前阶段优先提供浏览器端单图识别闭环，服务器识别仍保留任务接口。
+    选择处理方式并开始识别。当前支持浏览器端单图识别、视频逐帧识别和摄像头视频流实时识别；服务器模式仍保留任务提交能力。
 </p>
 
 <div class="workspace-grid">
@@ -17,16 +17,37 @@
             <span>当前执行模式：@ModeLabel</span>
         </div>
 
-        @if (Workbench.CurrentImage is not null)
+        <label class="form-label mt-3" for="local-input-kind">本地输入源</label>
+        <select id="local-input-kind"
+                class="form-select mode-select"
+                @bind="Workbench.SelectedLocalInputKind"
+                disabled="@(Workbench.RealtimeDetectionActive)">
+            <option value="@LocalInputKinds.Image">图片</option>
+            <option value="@LocalInputKinds.Video">视频</option>
+            <option value="@LocalInputKinds.Camera">摄像头视频流</option>
+        </select>
+
+        <p class="meta mt-3">@LocalInputHint</p>
+
+        @if (Workbench.SelectedLocalInputKind == LocalInputKinds.Image && Workbench.CurrentImage is not null)
         {
             <p class="meta">当前用于本地识别的图片：@Workbench.CurrentImage.Name</p>
+        }
+        else if (Workbench.SelectedLocalInputKind == LocalInputKinds.Video && Workbench.CurrentVideo is not null)
+        {
+            <p class="meta">
+                当前用于逐帧识别的视频：@Workbench.CurrentVideo.Name
+                · @RecognitionWorkbenchState.FormatBytes(Workbench.CurrentVideo.Size)
+            </p>
         }
     </section>
 
     <section class="panel">
         <h2>检测模式</h2>
         <p class="meta">自动模式会优先选择浏览器本地识别，服务器模式当前仅保留任务提交流程。</p>
-        <select class="form-select mode-select" @bind="Workbench.SelectedMode">
+        <select class="form-select mode-select"
+                @bind="Workbench.SelectedMode"
+                disabled="@(Workbench.RealtimeDetectionActive)">
             @foreach (var option in Workbench.AvailableRecognitionModes)
             {
                 <option value="@option.Value" disabled="@(!option.Enabled)">@option.Label</option>
@@ -49,7 +70,10 @@
         <p class="meta">仅对浏览器本地识别生效。内置模型读取站点本地静态资源，URL 导入和本地文件导入都直接在浏览器端完成；切换模型后会清空当前识别结果。</p>
 
         <label class="form-label" for="local-model-source">模型来源</label>
-        <select id="local-model-source" class="form-select model-select" @bind="Workbench.LocalModelSourceType">
+        <select id="local-model-source"
+                class="form-select model-select"
+                @bind="Workbench.LocalModelSourceType"
+                disabled="@(Workbench.RealtimeDetectionActive)">
             <option value="@LocalModelSourceTypes.Default">内置模型</option>
             <option value="@LocalModelSourceTypes.Url">通过 URL 导入</option>
             <option value="@LocalModelSourceTypes.File">通过本地文件导入</option>
@@ -62,7 +86,8 @@
                 <InputText id="local-model-url"
                            class="form-control"
                            @bind-Value="Workbench.CustomLocalModelUrl"
-                           placeholder="https://example.com/model.onnx" />
+                           placeholder="https://example.com/model.onnx"
+                           disabled="@(Workbench.RealtimeDetectionActive)" />
                 <p class="meta">URL 导入不会经过服务器代理，目标站点必须允许浏览器跨域访问，建议优先使用 HTTPS。</p>
             </div>
         }
@@ -70,7 +95,9 @@
         {
             <div class="model-input">
                 <label class="form-label">本地模型文件</label>
-                <InputFile OnChange="Workbench.HandleLocalModelSelectedAsync" accept=".onnx,.ort,application/octet-stream" />
+                <InputFile OnChange="Workbench.HandleLocalModelSelectedAsync"
+                           accept=".onnx,.ort,application/octet-stream"
+                           disabled="@(Workbench.RealtimeDetectionActive)" />
 
                 @if (Workbench.ImportedLocalModel is not null)
                 {
@@ -93,7 +120,76 @@
             <div class="status-banner status-banner--warning">@Workbench.LocalModelValidationMessage</div>
         }
     </section>
+
+    <section class="panel">
+        <h2>本地推理参数</h2>
+        <p class="meta">检测框上限默认 5。值越大，后处理和叠框开销越高，实时推理通常会更慢。</p>
+
+        <div class="model-input">
+            <label class="form-label" for="max-detections">检测框上限</label>
+            <InputNumber id="max-detections"
+                         class="form-control param-input"
+                         @bind-Value="Workbench.MaxDetections"
+                         min="1"
+                         max="50"
+                         disabled="@(Workbench.RealtimeDetectionActive)" />
+            <p class="meta">当前值：@Workbench.MaxDetections，允许范围 1-50。</p>
+        </div>
+    </section>
 </div>
+
+@if (ShowRealtimePanel)
+{
+    <section class="panel panel--wide">
+        <div class="panel__row">
+            <div>
+                <h2>实时预览</h2>
+                <p class="meta">@RealtimePreviewHint</p>
+            </div>
+
+            @if (Workbench.SelectedLocalInputKind == LocalInputKinds.Camera)
+            {
+                <button class="btn btn-outline-dark btn-sm"
+                        @onclick="RefreshDevicesAsync"
+                        disabled="@(Workbench.RealtimeDetectionActive)">
+                    刷新设备
+                </button>
+            }
+        </div>
+
+        @if (Workbench.SelectedLocalInputKind == LocalInputKinds.Camera)
+        {
+            <div class="camera-config">
+                <label class="form-label" for="detect-camera-device">摄像头设备</label>
+                <select id="detect-camera-device"
+                        class="form-select mode-select"
+                        @bind="Workbench.PreferredCameraDeviceId"
+                        disabled="@(Workbench.RealtimeDetectionActive)">
+                    <option value="">默认摄像头</option>
+                    @foreach (var device in _devices)
+                    {
+                        <option value="@device.DeviceId">@device.Label</option>
+                    }
+                </select>
+            </div>
+        }
+
+        <div class="realtime-stage">
+            <video @ref="_videoElement"
+                   class="realtime-source"
+                   autoplay
+                   playsinline
+                   muted
+                   loop="@IsVideoLocalInput"></video>
+            <canvas @ref="_previewCanvas" class="realtime-preview"></canvas>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(_realtimeStatusMessage))
+        {
+            <p class="meta">@_realtimeStatusMessage</p>
+        }
+    </section>
+}
 
 <section class="panel panel--wide">
     <div class="panel__row">
@@ -101,11 +197,22 @@
             <h2>任务执行</h2>
             <p class="meta">@ExecutionHint</p>
         </div>
-        <button class="btn btn-dark"
-                @onclick="HandleDetectionAsync"
-                disabled="@(!CanSubmit)">
-            @Workbench.SubmitButtonText
-        </button>
+        <div class="control-row">
+            <button class="btn btn-dark"
+                    @onclick="HandleDetectionAsync"
+                    disabled="@(!CanStartPrimaryAction)">
+                @PrimaryActionText
+            </button>
+
+            @if (ShowRealtimePanel)
+            {
+                <button class="btn btn-outline-secondary"
+                        @onclick="StopRealtimeDetectionAsync"
+                        disabled="@(!Workbench.RealtimeDetectionActive)">
+                    停止并保存最后一帧
+                </button>
+            }
+        </div>
     </div>
 
     @if (!string.IsNullOrWhiteSpace(Workbench.StatusMessage))
@@ -125,7 +232,17 @@
 </section>
 
 @code {
+    private readonly List<CameraDevice> _devices = [];
+    private ElementReference _videoElement;
+    private ElementReference _previewCanvas;
     private IJSObjectReference? _module;
+    private string? _realtimeStatusMessage;
+
+    private bool IsVideoLocalInput => Workbench.SelectedLocalInputKind == LocalInputKinds.Video;
+
+    private bool ShowRealtimePanel =>
+        Workbench.EffectiveMode != RecognitionModes.Server &&
+        Workbench.SelectedLocalInputKind is LocalInputKinds.Video or LocalInputKinds.Camera;
 
     private string ModeLabel => Workbench.EffectiveMode switch
     {
@@ -141,22 +258,73 @@
         _ => "内置模型"
     };
 
-    private string ExecutionHint => Workbench.EffectiveMode == RecognitionModes.Server
-        ? "服务器模式当前支持单图上传到 ApiService，由 Microsoft.ML.OnnxRuntime 执行推理。"
-        : $"本地模式将直接在浏览器中通过 onnxruntime-web 加载 ONNX 模型，优先使用 WebGPU 执行单图识别。当前模型：{Workbench.CurrentLocalModelDisplayName}。";
+    private string LocalInputHint => Workbench.SelectedLocalInputKind switch
+    {
+        LocalInputKinds.Video => Workbench.CurrentVideo is null
+            ? "请先在导入与采集页面选择待识别视频。当前实时推理将读取首个已导入视频并逐帧执行浏览器端识别。"
+            : $"将对视频 {Workbench.CurrentVideo.Name} 进行逐帧浏览器端识别。",
+        LocalInputKinds.Camera => "将直接从浏览器摄像头视频流采样并实时叠加检测框。",
+        _ => Workbench.CurrentImage is null
+            ? "请先在导入与采集页面选择图片。"
+            : $"将对图片 {Workbench.CurrentImage.Name} 执行一次性浏览器端识别。"
+    };
 
-    private bool CanSubmit =>
+    private string ExecutionHint => Workbench.EffectiveMode switch
+    {
+        RecognitionModes.Server => "服务器模式当前支持单图上传到 ApiService，由 Microsoft.ML.OnnxRuntime 执行推理。",
+        _ when Workbench.SelectedLocalInputKind == LocalInputKinds.Video
+            => $"本地模式将直接在浏览器中通过 onnxruntime-web 加载 ONNX 模型，对导入视频逐帧识别。当前模型：{Workbench.CurrentLocalModelDisplayName}。",
+        _ when Workbench.SelectedLocalInputKind == LocalInputKinds.Camera
+            => $"本地模式将直接在浏览器中通过 onnxruntime-web 加载 ONNX 模型，对摄像头视频流实时识别。当前模型：{Workbench.CurrentLocalModelDisplayName}。",
+        _ => $"本地模式将直接在浏览器中通过 onnxruntime-web 加载 ONNX 模型，优先使用 WebGPU 执行单图识别。当前模型：{Workbench.CurrentLocalModelDisplayName}。"
+    };
+
+    private string PrimaryActionText => Workbench.EffectiveMode switch
+    {
+        RecognitionModes.Server => Workbench.SubmitButtonText,
+        _ when ShowRealtimePanel && Workbench.RealtimeDetectionActive => "实时推理运行中",
+        _ when ShowRealtimePanel => "启动实时推理",
+        _ => Workbench.SubmitButtonText
+    };
+
+    private string RealtimePreviewHint => Workbench.SelectedLocalInputKind switch
+    {
+        LocalInputKinds.Camera => "启动后会实时读取摄像头帧并在预览画面上叠加检测框。",
+        _ => "启动后会自动播放导入视频，并在画面上持续叠加检测框。"
+    };
+
+    private bool CanStartPrimaryAction =>
         !Workbench.Processing &&
+        !Workbench.RealtimeDetectionActive &&
         (
             Workbench.EffectiveMode == RecognitionModes.Server
                 ? Workbench.ImageCount > 0 || Workbench.VideoCount > 0
-                : Workbench.CurrentImage is not null && Workbench.IsLocalModelSelectionReady
+                : ShowRealtimePanel
+                    ? CanStartRealtimeDetection
+                    : Workbench.CurrentImage is not null && Workbench.IsLocalModelSelectionReady
+        );
+
+    private bool CanStartRealtimeDetection =>
+        Workbench.IsLocalModelSelectionReady &&
+        (
+            Workbench.SelectedLocalInputKind == LocalInputKinds.Camera ||
+            Workbench.CurrentVideo is not null
         );
 
     protected override async Task OnInitializedAsync()
     {
         Workbench.Changed += HandleStateChanged;
         await Workbench.InitializeAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || Workbench.SelectedLocalInputKind != LocalInputKinds.Camera)
+        {
+            return;
+        }
+
+        await RefreshDevicesAsync();
     }
 
     private async Task HandleDetectionAsync()
@@ -167,6 +335,17 @@
             return;
         }
 
+        if (ShowRealtimePanel)
+        {
+            await StartRealtimeDetectionAsync();
+            return;
+        }
+
+        await RunSingleImageDetectionAsync();
+    }
+
+    private async Task RunSingleImageDetectionAsync()
+    {
         if (Workbench.CurrentImage is null)
         {
             Workbench.FailProcessing("请先选择待识别的图片。");
@@ -189,7 +368,8 @@
                 Workbench.CurrentImage.DataUrl,
                 Workbench.CurrentImage.Name,
                 Workbench.EffectiveMode,
-                modelRequest);
+                modelRequest,
+                BuildRuntimeOptions());
 
             if (response?.Result is null || string.IsNullOrWhiteSpace(response.AnnotatedImageDataUrl))
             {
@@ -198,12 +378,123 @@
             }
 
             Workbench.CompleteLocalRecognition(response.Result, response.AnnotatedImageDataUrl);
+            _realtimeStatusMessage = string.IsNullOrWhiteSpace(response.ExecutionProvider)
+                ? null
+                : $"本次本地识别执行提供器：{response.ExecutionProvider}。";
         }
         catch (Exception ex)
         {
             Workbench.FailProcessing($"本地识别失败：{ex.Message}");
         }
     }
+
+    private async Task StartRealtimeDetectionAsync()
+    {
+        if (!Workbench.TryBuildLocalModelRequest(out var modelRequest, out var validationMessage))
+        {
+            Workbench.FailProcessing(validationMessage ?? "当前模型配置无效。");
+            return;
+        }
+
+        if (Workbench.SelectedLocalInputKind == LocalInputKinds.Video && Workbench.CurrentVideo is null)
+        {
+            Workbench.FailProcessing("请先在导入与采集页面选择待识别视频。");
+            return;
+        }
+
+        try
+        {
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "/js/detect.js");
+            Workbench.BeginProcessing("正在启动浏览器端实时推理并准备视频流...");
+
+            var request = new BrowserRealtimeDetectionRequest(
+                Workbench.SelectedLocalInputKind,
+                BuildRealtimeInputSource(),
+                Workbench.EffectiveMode,
+                modelRequest!,
+                BuildRuntimeOptions(),
+                Workbench.CurrentVideo?.ContentType,
+                Workbench.CurrentVideo?.Bytes,
+                Workbench.PreferredCameraDeviceId);
+
+            var startResponse = await _module.InvokeAsync<BrowserRuntimeStartResponse>(
+                "startRealtimeDetection",
+                _videoElement,
+                _previewCanvas,
+                request);
+
+            Workbench.BeginRealtimeDetection("浏览器端实时推理已启动。可在当前预览区域查看叠加检测结果。");
+            var providerSuffix = string.IsNullOrWhiteSpace(startResponse?.ProviderName)
+                ? string.Empty
+                : $" 当前执行提供器：{startResponse.ProviderName}。";
+            _realtimeStatusMessage = Workbench.SelectedLocalInputKind == LocalInputKinds.Camera
+                ? $"摄像头视频流实时推理运行中。{providerSuffix}".Trim()
+                : $"视频逐帧识别运行中。{providerSuffix}".Trim();
+        }
+        catch (Exception ex)
+        {
+            Workbench.FailProcessing($"启动实时推理失败：{ex.Message}");
+            _realtimeStatusMessage = $"启动实时推理失败：{ex.Message}";
+        }
+    }
+
+    private async Task StopRealtimeDetectionAsync()
+    {
+        if (!Workbench.RealtimeDetectionActive)
+        {
+            return;
+        }
+
+        try
+        {
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "/js/detect.js");
+            var response = await _module.InvokeAsync<BrowserDetectionResponse?>("stopRealtimeDetection");
+
+            if (response?.Result is null || string.IsNullOrWhiteSpace(response.AnnotatedImageDataUrl))
+            {
+                Workbench.FailProcessing("实时推理已停止，但未生成有效结果。");
+                _realtimeStatusMessage = "实时推理已停止，但没有可保存的最后一帧。";
+                return;
+            }
+
+            Workbench.CompleteLocalRecognition(response.Result, response.AnnotatedImageDataUrl);
+            _realtimeStatusMessage = "已停止实时推理，并保存最后一帧结果。";
+        }
+        catch (Exception ex)
+        {
+            Workbench.FailProcessing($"停止实时推理失败：{ex.Message}");
+            _realtimeStatusMessage = $"停止实时推理失败：{ex.Message}";
+        }
+    }
+
+    private async Task RefreshDevicesAsync()
+    {
+        try
+        {
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "/js/detect.js");
+            var devices = await _module.InvokeAsync<CameraDevice[]>("listVideoDevices");
+            _devices.Clear();
+            _devices.AddRange(devices);
+            _realtimeStatusMessage = _devices.Count == 0
+                ? "未检测到可用的视频输入设备。请先授予浏览器摄像头权限。"
+                : $"已检测到 {_devices.Count} 个摄像头设备。";
+        }
+        catch (Exception ex)
+        {
+            _realtimeStatusMessage = $"读取摄像头设备失败：{ex.Message}";
+        }
+    }
+
+    private string BuildRealtimeInputSource() => Workbench.SelectedLocalInputKind switch
+    {
+        LocalInputKinds.Camera => string.IsNullOrWhiteSpace(Workbench.PreferredCameraDeviceId)
+            ? "默认摄像头视频流"
+            : $"摄像头视频流：{Workbench.PreferredCameraDeviceId}",
+        _ => Workbench.CurrentVideo?.Name ?? "视频流"
+    };
+
+    private BrowserRuntimeOptions BuildRuntimeOptions() => new(
+        Workbench.MaxDetections);
 
     private void HandleStateChanged() => InvokeAsync(StateHasChanged);
 
@@ -213,13 +504,41 @@
 
         if (_module is not null)
         {
+            try
+            {
+                await _module.InvokeVoidAsync("disposeRealtimeDetection", _videoElement, _previewCanvas);
+            }
+            catch
+            {
+                // 组件卸载时忽略实时检测清理失败，避免覆盖主流程异常。
+            }
+
             await _module.DisposeAsync();
         }
     }
 
     private sealed record BrowserDetectionResponse(
         string AnnotatedImageDataUrl,
-        RecognitionResultDto Result);
+        RecognitionResultDto Result,
+        string? ExecutionProvider);
+
+    private sealed record BrowserRuntimeStartResponse(
+        string? ProviderName);
+
+    private sealed record BrowserRealtimeDetectionRequest(
+        string SourceKind,
+        string InputSource,
+        string Mode,
+        BrowserLocalModelRequest ModelOptions,
+        BrowserRuntimeOptions RuntimeOptions,
+        string? VideoContentType,
+        byte[]? VideoBytes,
+        string? CameraDeviceId);
+
+    private sealed record BrowserRuntimeOptions(
+        int MaxDetections);
+
+    private sealed record CameraDevice(string DeviceId, string Label);
 }
 
 <style>
@@ -236,11 +555,13 @@
     }
 
     .mode-select,
-    .model-select {
+    .model-select,
+    .param-input {
         max-width: 18rem;
     }
 
-    .model-input {
+    .model-input,
+    .camera-config {
         margin-top: 1rem;
     }
 
@@ -269,6 +590,39 @@
 
     .capability-notes li + li {
         margin-top: 0.45rem;
+    }
+
+    .control-row {
+        display: flex;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+    }
+
+    .realtime-stage {
+        position: relative;
+        margin-top: 1rem;
+        border-radius: 1rem;
+        overflow: hidden;
+        border: 1px solid rgba(20, 33, 39, 0.08);
+        background: linear-gradient(135deg, #172329, #0d1217);
+        min-height: 320px;
+    }
+
+    .realtime-preview {
+        display: block;
+        width: 100%;
+        max-height: 620px;
+        position: relative;
+        z-index: 1;
+        background: #0d1217;
+    }
+
+    .realtime-source {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        opacity: 0;
+        pointer-events: none;
     }
 
     @@media (max-width: 640px) {
