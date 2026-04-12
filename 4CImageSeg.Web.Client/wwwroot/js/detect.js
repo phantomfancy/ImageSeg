@@ -1,13 +1,20 @@
 import * as ort from "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.3/dist/ort.webgpu.min.mjs";
 
-const modelConfig = {
-  modelUrl: "https://huggingface.co/onnx-community/yolo26s-ONNX/resolve/main/onnx/model_int8.onnx?download=true",
-  modelVersion: "https://huggingface.co/onnx-community/yolo26s-ONNX/blob/main/onnx/model_int8.onnx",
+const runtimeConfig = {
   ortVersion: "1.24.3",
   inputWidth: 640,
   inputHeight: 640,
   scoreThreshold: 0.35,
   maxDetections: 20
+};
+
+const defaultModelConfig = {
+  cacheKey: "builtin:yolo26s:model_int8",
+  sourceType: "default",
+  modelUrl: "/models/yolo26s/model_int8.onnx",
+  modelVersion: "builtin:/models/yolo26s/model_int8.onnx",
+  displayName: "内置模型 yolo26s / model_int8.onnx",
+  modelBytes: undefined
 };
 
 const cocoLabels = [
@@ -93,13 +100,17 @@ const cocoLabels = [
   "toothbrush"
 ];
 
-const ortDistBaseUrl = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${modelConfig.ortVersion}/dist/`;
+const ortDistBaseUrl = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${runtimeConfig.ortVersion}/dist/`;
 ort.env.wasm.wasmPaths = ortDistBaseUrl;
+ort.env.wasm.numThreads = 1;
+ort.env.wasm.proxy = false;
 
 let sessionPromise;
+let sessionCacheKey;
 
-export async function runSingleImageDetection(imageDataUrl, inputSource, mode) {
-  const session = await getSession();
+export async function runSingleImageDetection(imageDataUrl, inputSource, mode, modelOptions) {
+  const resolvedModel = resolveModelOptions(modelOptions);
+  const session = await getSession(resolvedModel);
   const image = await loadImage(imageDataUrl);
   const inputTensor = createInputTensor(image.canvas);
   const inputName = session.inputNames[0];
@@ -117,7 +128,7 @@ export async function runSingleImageDetection(imageDataUrl, inputSource, mode) {
     result: {
       inputSource,
       mode,
-      modelVersion: modelConfig.modelVersion,
+      modelVersion: resolvedModel.modelVersion,
       detectedAtUtc: new Date().toISOString(),
       detections: detections.map((item) => ({
         label: item.label,
@@ -133,10 +144,12 @@ export async function runSingleImageDetection(imageDataUrl, inputSource, mode) {
   };
 }
 
-async function getSession() {
-  if (!sessionPromise) {
-    sessionPromise = createSessionWithFallback().catch((error) => {
+async function getSession(modelOptions) {
+  if (!sessionPromise || sessionCacheKey !== modelOptions.cacheKey) {
+    sessionCacheKey = modelOptions.cacheKey;
+    sessionPromise = createSessionWithFallback(modelOptions).catch((error) => {
       sessionPromise = undefined;
+      sessionCacheKey = undefined;
       throw error;
     });
   }
@@ -144,12 +157,13 @@ async function getSession() {
   return sessionPromise;
 }
 
-async function createSessionWithFallback() {
+async function createSessionWithFallback(modelOptions) {
   const errors = [];
+  const modelSource = await getModelSource(modelOptions);
 
   for (const provider of getExecutionProviders()) {
     try {
-      return await ort.InferenceSession.create(modelConfig.modelUrl, {
+      return await ort.InferenceSession.create(modelSource, {
         executionProviders: [provider]
       });
     } catch (error) {
@@ -157,7 +171,124 @@ async function createSessionWithFallback() {
     }
   }
 
-  throw new Error(`无法通过 ONNX Runtime Web 加载模型 ${modelConfig.modelVersion}。${errors.join("；")}`);
+  throw new Error(`无法通过 ONNX Runtime Web 加载模型 ${modelOptions.modelVersion}。${errors.join("；")}`);
+}
+
+function resolveModelOptions(modelOptions) {
+  const sourceType = typeof modelOptions?.sourceType === "string"
+    ? modelOptions.sourceType.trim().toLowerCase()
+    : defaultModelConfig.sourceType;
+
+  if (sourceType === "url") {
+    const modelUrl = typeof modelOptions?.modelUrl === "string" ? modelOptions.modelUrl.trim() : "";
+    return {
+      cacheKey: normalizeCacheKey(modelOptions?.cacheKey, `url:${modelUrl}`),
+      sourceType,
+      modelUrl,
+      modelVersion: normalizeModelVersion(modelOptions?.modelVersion, modelUrl),
+      displayName: normalizeDisplayName(modelOptions?.displayName, modelUrl),
+      modelBytes: undefined
+    };
+  }
+
+  if (sourceType === "file") {
+    const modelBytes = normalizeModelBytes(modelOptions?.modelBytes);
+    return {
+      cacheKey: normalizeCacheKey(modelOptions?.cacheKey, `file:${modelOptions?.displayName ?? modelBytes.length}`),
+      sourceType,
+      modelUrl: undefined,
+      modelVersion: normalizeModelVersion(modelOptions?.modelVersion, modelOptions?.displayName ?? "本地文件"),
+      displayName: normalizeDisplayName(modelOptions?.displayName, "本地文件"),
+      modelBytes
+    };
+  }
+
+  return {
+    ...defaultModelConfig
+  };
+}
+
+function normalizeCacheKey(value, fallbackValue) {
+  return typeof value === "string" && value.length > 0 ? value : fallbackValue;
+}
+
+function normalizeModelVersion(value, fallbackValue) {
+  return typeof value === "string" && value.length > 0 ? value : fallbackValue;
+}
+
+function normalizeDisplayName(value, fallbackValue) {
+  return typeof value === "string" && value.length > 0 ? value : fallbackValue;
+}
+
+function normalizeModelBytes(modelBytes) {
+  if (!modelBytes) {
+    return new Uint8Array();
+  }
+
+  if (modelBytes instanceof Uint8Array) {
+    return modelBytes;
+  }
+
+  if (modelBytes instanceof ArrayBuffer) {
+    return new Uint8Array(modelBytes);
+  }
+
+  if (ArrayBuffer.isView(modelBytes)) {
+    return new Uint8Array(modelBytes.buffer.slice(
+      modelBytes.byteOffset,
+      modelBytes.byteOffset + modelBytes.byteLength
+    ));
+  }
+
+  if (Array.isArray(modelBytes)) {
+    return Uint8Array.from(modelBytes);
+  }
+
+  if (typeof modelBytes.length === "number") {
+    return Uint8Array.from(modelBytes);
+  }
+
+  throw new Error("无法解析本地模型文件数据。");
+}
+
+async function getModelSource(modelOptions) {
+  if (modelOptions.sourceType === "file") {
+    if (!(modelOptions.modelBytes instanceof Uint8Array) || modelOptions.modelBytes.length === 0) {
+      throw new Error("本地模型文件为空。");
+    }
+
+    return modelOptions.modelBytes;
+  }
+
+  if (typeof modelOptions.modelUrl !== "string" || modelOptions.modelUrl.length === 0) {
+    throw new Error("模型 URL 为空。");
+  }
+
+  return await fetchModelBytes(modelOptions.modelUrl);
+}
+
+async function fetchModelBytes(modelUrl) {
+  let response;
+
+  try {
+    response = await fetch(modelUrl, {
+      method: "GET",
+      cache: "no-store"
+    });
+  } catch (error) {
+    throw new Error(`浏览器无法直接下载模型。请检查 URL 是否可访问且已允许跨域访问。${formatErrorMessage(error)}`);
+  }
+
+  if (!response.ok) {
+    throw new Error(`模型下载失败：HTTP ${response.status}`);
+  }
+
+  const buffer = await response.arrayBuffer();
+  if (!buffer || buffer.byteLength === 0) {
+    throw new Error("模型下载结果为空。");
+  }
+
+  return new Uint8Array(buffer);
 }
 
 function getExecutionProviders() {
@@ -187,18 +318,18 @@ function getOutputTensor(outputMap, outputNames, expectedName) {
 
 function createInputTensor(sourceCanvas) {
   const canvas = document.createElement("canvas");
-  canvas.width = modelConfig.inputWidth;
-  canvas.height = modelConfig.inputHeight;
+  canvas.width = runtimeConfig.inputWidth;
+  canvas.height = runtimeConfig.inputHeight;
 
   const context = canvas.getContext("2d");
   if (!context) {
     throw new Error("浏览器不支持 Canvas 2D。");
   }
 
-  context.drawImage(sourceCanvas, 0, 0, modelConfig.inputWidth, modelConfig.inputHeight);
-  const { data } = context.getImageData(0, 0, modelConfig.inputWidth, modelConfig.inputHeight);
-  const tensorData = new Float32Array(1 * 3 * modelConfig.inputHeight * modelConfig.inputWidth);
-  const channelSize = modelConfig.inputHeight * modelConfig.inputWidth;
+  context.drawImage(sourceCanvas, 0, 0, runtimeConfig.inputWidth, runtimeConfig.inputHeight);
+  const { data } = context.getImageData(0, 0, runtimeConfig.inputWidth, runtimeConfig.inputHeight);
+  const tensorData = new Float32Array(1 * 3 * runtimeConfig.inputHeight * runtimeConfig.inputWidth);
+  const channelSize = runtimeConfig.inputHeight * runtimeConfig.inputWidth;
 
   for (let index = 0; index < channelSize; index += 1) {
     const pixelOffset = index * 4;
@@ -207,7 +338,7 @@ function createInputTensor(sourceCanvas) {
     tensorData[channelSize * 2 + index] = data[pixelOffset + 2] / 255;
   }
 
-  return new ort.Tensor("float32", tensorData, [1, 3, modelConfig.inputHeight, modelConfig.inputWidth]);
+  return new ort.Tensor("float32", tensorData, [1, 3, runtimeConfig.inputHeight, runtimeConfig.inputWidth]);
 }
 
 function extractDetections(logits, predBoxes, imageWidth, imageHeight) {
@@ -249,7 +380,7 @@ function extractDetections(logits, predBoxes, imageWidth, imageHeight) {
       }
     }
 
-    if (bestScore < modelConfig.scoreThreshold) {
+    if (bestScore < runtimeConfig.scoreThreshold) {
       continue;
     }
 
@@ -277,7 +408,7 @@ function extractDetections(logits, predBoxes, imageWidth, imageHeight) {
 
   return detections
     .sort((left, right) => right.confidence - left.confidence)
-    .slice(0, modelConfig.maxDetections);
+    .slice(0, runtimeConfig.maxDetections);
 }
 
 function validateTensor(tensor, name) {

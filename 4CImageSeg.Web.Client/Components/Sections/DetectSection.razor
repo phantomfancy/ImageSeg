@@ -43,6 +43,56 @@
             </ul>
         }
     </section>
+
+    <section class="panel">
+        <h2>本地 ONNX 模型</h2>
+        <p class="meta">仅对浏览器本地识别生效。内置模型读取站点本地静态资源，URL 导入和本地文件导入都直接在浏览器端完成；切换模型后会清空当前识别结果。</p>
+
+        <label class="form-label" for="local-model-source">模型来源</label>
+        <select id="local-model-source" class="form-select model-select" @bind="Workbench.LocalModelSourceType">
+            <option value="@LocalModelSourceTypes.Default">内置模型</option>
+            <option value="@LocalModelSourceTypes.Url">通过 URL 导入</option>
+            <option value="@LocalModelSourceTypes.File">通过本地文件导入</option>
+        </select>
+
+        @if (Workbench.LocalModelSourceType == LocalModelSourceTypes.Url)
+        {
+            <div class="model-input">
+                <label class="form-label" for="local-model-url">模型 URL</label>
+                <InputText id="local-model-url"
+                           class="form-control"
+                           @bind-Value="Workbench.CustomLocalModelUrl"
+                           placeholder="https://example.com/model.onnx" />
+                <p class="meta">URL 导入不会经过服务器代理，目标站点必须允许浏览器跨域访问，建议优先使用 HTTPS。</p>
+            </div>
+        }
+        else if (Workbench.LocalModelSourceType == LocalModelSourceTypes.File)
+        {
+            <div class="model-input">
+                <label class="form-label">本地模型文件</label>
+                <InputFile OnChange="Workbench.HandleLocalModelSelectedAsync" accept=".onnx,.ort,application/octet-stream" />
+
+                @if (Workbench.ImportedLocalModel is not null)
+                {
+                    <p class="meta">
+                        已导入：@Workbench.ImportedLocalModel.Name
+                        · @RecognitionWorkbenchState.FormatBytes(Workbench.ImportedLocalModel.Size)
+                    </p>
+                }
+            </div>
+        }
+
+        <div class="job-card job-card--model">
+            <span>当前来源：@LocalModelSourceLabel</span>
+            <span>当前模型：@Workbench.CurrentLocalModelDisplayName</span>
+            <span>@Workbench.LocalModelNotice</span>
+        </div>
+
+        @if (!Workbench.IsLocalModelSelectionReady && Workbench.EffectiveMode != RecognitionModes.Server)
+        {
+            <div class="status-banner status-banner--warning">@Workbench.LocalModelValidationMessage</div>
+        }
+    </section>
 </div>
 
 <section class="panel panel--wide">
@@ -84,16 +134,23 @@
         _ => "自动选择"
     };
 
+    private string LocalModelSourceLabel => Workbench.LocalModelSourceType switch
+    {
+        LocalModelSourceTypes.Url => "URL 导入",
+        LocalModelSourceTypes.File => "本地文件导入",
+        _ => "内置模型"
+    };
+
     private string ExecutionHint => Workbench.EffectiveMode == RecognitionModes.Server
         ? "服务器模式当前支持单图上传到 ApiService，由 Microsoft.ML.OnnxRuntime 执行推理。"
-        : "本地模式将直接在浏览器中通过 onnxruntime-web 加载 ONNX 模型，优先使用 WebGPU 执行单图识别。";
+        : $"本地模式将直接在浏览器中通过 onnxruntime-web 加载 ONNX 模型，优先使用 WebGPU 执行单图识别。当前模型：{Workbench.CurrentLocalModelDisplayName}。";
 
     private bool CanSubmit =>
         !Workbench.Processing &&
         (
             Workbench.EffectiveMode == RecognitionModes.Server
                 ? Workbench.ImageCount > 0 || Workbench.VideoCount > 0
-                : Workbench.CurrentImage is not null
+                : Workbench.CurrentImage is not null && Workbench.IsLocalModelSelectionReady
         );
 
     protected override async Task OnInitializedAsync()
@@ -116,6 +173,12 @@
             return;
         }
 
+        if (!Workbench.TryBuildLocalModelRequest(out var modelRequest, out var validationMessage))
+        {
+            Workbench.FailProcessing(validationMessage ?? "当前模型配置无效。");
+            return;
+        }
+
         try
         {
             _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "/js/detect.js");
@@ -125,7 +188,8 @@
                 "runSingleImageDetection",
                 Workbench.CurrentImage.DataUrl,
                 Workbench.CurrentImage.Name,
-                Workbench.EffectiveMode);
+                Workbench.EffectiveMode,
+                modelRequest);
 
             if (response?.Result is null || string.IsNullOrWhiteSpace(response.AnnotatedImageDataUrl))
             {
@@ -171,8 +235,17 @@
         margin-bottom: 1rem;
     }
 
-    .mode-select {
+    .mode-select,
+    .model-select {
         max-width: 18rem;
+    }
+
+    .model-input {
+        margin-top: 1rem;
+    }
+
+    .job-card--model {
+        margin-top: 1rem;
     }
 
     .status-banner {
@@ -181,6 +254,11 @@
         margin-top: 1rem;
         background: rgba(12, 110, 122, 0.12);
         color: #124c57;
+    }
+
+    .status-banner--warning {
+        background: rgba(196, 120, 28, 0.14);
+        color: #7c4b0b;
     }
 
     .capability-notes {
