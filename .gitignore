@@ -7,6 +7,11 @@
 # our project-specific files
 .dotnet/
 .dotnet-cli/
+4CImageSeg.Training/dataset
+4CImageSeg.Training/runs
+*.onnx
+*.pt
+runs/
 
 # User-specific files
 *.rsuser
