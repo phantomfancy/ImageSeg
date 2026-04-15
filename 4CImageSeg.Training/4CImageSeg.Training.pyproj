@@ -5,7 +5,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>{461a9686-974b-4858-b87b-1d17c918b34c}</ProjectGuid>
     <ProjectHome />
-    <StartupFile>train_himars.py</StartupFile>
+    <StartupFile>train_himars_yolo.py</StartupFile>
     <SearchPath />
     <WorkingDirectory>.</WorkingDirectory>
     <OutputPath>.</OutputPath>
@@ -19,7 +19,8 @@
     <VisualStudioVersion Condition=" '$(VisualStudioVersion)' == '' ">10.0</VisualStudioVersion>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="train_himars.py" />
+    <Compile Include="train_himars_yolo.py" />
+    <Compile Include="train_himars_rtdetrv2.py" />
   </ItemGroup>
   <ItemGroup>
     <Folder Include="dataset\" />
