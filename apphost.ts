@@ -5,5 +5,6 @@ const builder = await createBuilder()
 await builder
   .addViteApp('frontend', './web-app/frontend')
   .withNpm()
+  .withExternalHttpEndpoints()
 
 await builder.build().run()

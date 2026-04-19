@@ -1,4 +1,5 @@
-import onnxProto from '../../node_modules/onnxruntime-web/lib/onnxjs/ort-schema/protobuf/onnx.js'
+import onnxProtoSource from '../../node_modules/onnxruntime-web/lib/onnxjs/ort-schema/protobuf/onnx.js?raw'
+import * as protobuf from 'protobufjs/minimal'
 
 import {
   resolveLabelsFromMetadata,
@@ -38,6 +39,11 @@ export interface ParsedOnnxModel {
   labels: Record<number, string>
 }
 
+let cachedOnnxProto:
+  | { onnx?: { ModelProto: { decode: (input: Uint8Array) => DecodedModel } } }
+  | null
+  = null
+
 export function inspectOnnxModelBytes(bytes: Uint8Array): ParsedOnnxModel {
   const model = decodeModel(bytes)
   const initializerNames = new Set(
@@ -70,12 +76,46 @@ export function inspectOnnxModelBytes(bytes: Uint8Array): ParsedOnnxModel {
 }
 
 function decodeModel(bytes: Uint8Array): DecodedModel {
-  const root = (onnxProto as { onnx?: { ModelProto: { decode: (input: Uint8Array) => DecodedModel } } }).onnx
+  const onnxProto = getOnnxProto()
+  const root = onnxProto.onnx
   if (!root?.ModelProto) {
     throw new Error('无法加载 ONNX protobuf 解析器。')
   }
 
   return root.ModelProto.decode(bytes)
+}
+
+function getOnnxProto(): { onnx?: { ModelProto: { decode: (input: Uint8Array) => DecodedModel } } } {
+  if (cachedOnnxProto) {
+    return cachedOnnxProto
+  }
+
+  const module = { exports: {} as unknown }
+  const exports = module.exports
+  const require = (id: string): unknown => {
+    if (id === 'protobufjs/minimal') {
+      return protobuf
+    }
+
+    throw new Error(`不支持的 ONNX 解析器依赖: ${id}`)
+  }
+
+  const factory = new Function(
+    'require',
+    'module',
+    'exports',
+    `${onnxProtoSource}\nreturn module.exports;`,
+  ) as (
+    require: (id: string) => unknown,
+    module: { exports: unknown },
+    exports: unknown,
+  ) => unknown
+
+  cachedOnnxProto = factory(require, module, exports) as {
+    onnx?: { ModelProto: { decode: (input: Uint8Array) => DecodedModel } }
+  }
+
+  return cachedOnnxProto
 }
 
 function toTensorDescriptor(valueInfo: ValueInfo): TensorDescriptor {
