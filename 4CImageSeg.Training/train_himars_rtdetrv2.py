@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import inspect
 import json
+import numpy as np
 import os
 from multiprocessing import freeze_support
 from pathlib import Path
@@ -20,9 +21,9 @@ import yaml
 
 
 PROJECT_DIR = Path(__file__).resolve().parent
-DATASET_CONFIG_PATH = PROJECT_DIR / "himars.yaml" / "himars.yaml"
-OUTPUT_DIR = PROJECT_DIR / "runs" / "rtdetrv2-himars"
-METADATA_CACHE_PATH = PROJECT_DIR / ".cache" / "train_himars_metadata.json"
+DATASET_CONFIG_PATH = PROJECT_DIR / "data.yaml"
+OUTPUT_DIR = PROJECT_DIR / "runs" / "rtdetrv2-equipment"
+METADATA_CACHE_PATH = PROJECT_DIR / ".cache" / "train_equipment_metadata.json"
 MODEL_NAME = "PekingU/rtdetr_v2_r18vd"
 IMAGE_SIZE = 640
 EPOCHS = 10
@@ -30,8 +31,8 @@ LEARNING_RATE = 5e-5
 WEIGHT_DECAY = 1e-4
 WARMUP_RATIO = 0.1
 MAX_GRAD_NORM = 1.0
-TRAIN_BATCH_SIZE = 4 if torch.cuda.is_available() else 2
-EVAL_BATCH_SIZE = 4 if torch.cuda.is_available() else 2
+TRAIN_BATCH_SIZE = 8 if torch.cuda.is_available() else 2
+EVAL_BATCH_SIZE = 8 if torch.cuda.is_available() else 2
 GRADIENT_ACCUMULATION_STEPS = 1
 LOGGING_STEPS = 10
 SAVE_TOTAL_LIMIT = 2
@@ -39,7 +40,7 @@ SEED = 42
 EXPORT_ONNX = True
 EXPORT_ONNX_FP16 = True
 EXPORT_ONNX_INT8 = True
-OVERWRITE_OUTPUT = False
+OVERWRITE_OUTPUT = True
 RESUME_FROM_CHECKPOINT: str | None = "auto"
 GRADIENT_CHECKPOINTING = False
 COMPILE_MODEL = False
@@ -118,7 +119,7 @@ def load_dataset_config(config_path: Path) -> tuple[Path, Path, Path, Path, list
     with config_path.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
 
-    required_keys = {"path", "train", "val", "names"}
+    required_keys = {"train", "val", "names"}
     missing_keys = sorted(required_keys.difference(raw))
     if missing_keys:
         raise ValueError(f"数据集配置缺少必要字段：{', '.join(missing_keys)}")
@@ -368,9 +369,8 @@ def format_annotations_as_coco(sample: dict[str, Any]) -> dict[str, Any]:
 
 
 class YoloDetectionDataset(Dataset):
-    def __init__(self, samples: list[dict[str, Any]], image_processor: RTDetrImageProcessor) -> None:
+    def __init__(self, samples: list[dict[str, Any]]) -> None:
         self.samples = samples
-        self.image_processor = image_processor
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -379,13 +379,11 @@ class YoloDetectionDataset(Dataset):
         sample = self.samples[index]
 
         with Image.open(sample["image_path"]) as image:
-            image = image.convert("RGB")
-            annotations = format_annotations_as_coco(sample)
-            encoded = self.image_processor(images=image, annotations=annotations, return_tensors="pt")
+            image = np.asarray(image.convert("RGB"), dtype=np.uint8)
 
         return {
-            "pixel_values": encoded["pixel_values"][0],
-            "labels": encoded["labels"][0],
+            "image": image,
+            "annotations": format_annotations_as_coco(sample),
         }
 
 
@@ -394,9 +392,11 @@ class DetectionBatchCollator:
         self.image_processor = image_processor
 
     def __call__(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
-        pixel_values = [example["pixel_values"] for example in examples]
-        batch = self.image_processor.pad(pixel_values, return_tensors="pt")
-        batch["labels"] = [example["labels"] for example in examples]
+        images = [example["image"] for example in examples]
+        annotations = [example["annotations"] for example in examples]
+        encoded = self.image_processor(images=images, annotations=annotations, return_tensors="pt")
+        batch = {key: value for key, value in encoded.items() if key != "labels"}
+        batch["labels"] = encoded["labels"]
         return batch
 
 
@@ -469,6 +469,9 @@ def build_training_arguments(runtime: dict[str, Any]) -> TrainingArguments:
         "data_seed": SEED,
         "save_safetensors": True,
     }
+
+    if runtime["cuda_available"] and "optim" in supported_parameters:
+        common_kwargs["optim"] = "adamw_torch_fused"
 
     if DATALOADER_NUM_WORKERS > 0 and "dataloader_prefetch_factor" in supported_parameters:
         common_kwargs["dataloader_prefetch_factor"] = DATALOADER_PREFETCH_FACTOR
@@ -905,14 +908,15 @@ def main() -> None:
 
     image_processor = RTDetrImageProcessor.from_pretrained(
         MODEL_NAME,
+        use_fast=True,
         do_resize=True,
         size={"height": IMAGE_SIZE, "width": IMAGE_SIZE},
         do_pad=True,
         pad_size={"height": IMAGE_SIZE, "width": IMAGE_SIZE},
     )
 
-    train_dataset = YoloDetectionDataset(train_samples, image_processor)
-    eval_dataset = YoloDetectionDataset(val_samples, image_processor)
+    train_dataset = YoloDetectionDataset(train_samples)
+    eval_dataset = YoloDetectionDataset(val_samples)
 
     model = RTDetrV2ForObjectDetection.from_pretrained(
         MODEL_NAME,
