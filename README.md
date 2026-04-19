@@ -1,73 +1,56 @@
 # 4CImageSeg
 
-`4C-ai装备识别工具` 的源码仓库。
+`4C-ai装备识别工具` 已切换到 `React 19 + TypeScript + ONNX Runtime Web/WebGPU + Aspire TypeScript AppHost` 架构。
 
-本项目目标是构建一个基于 `ASP.NET Core 10 + Blazor Web App + Interactive Auto + Aspire 13` 的渐进式 Web 应用，用于图片、视频和摄像头画面中的装备识别，并支持结果查看与导出。
+## 当前结构
 
-## 项目功能
+- `apphost.ts`：根目录 Aspire TS AppHost
+- `web-app/contracts`：纯 TypeScript 模型契约包
+- `web-app/frontend`：React 19 + TS/TSX 前端
+- `pytorch-training/4CImageSeg.Training`：训练脚本、数据与导出模型
 
-当前目标功能包括：
+## 当前目标
 
-- 导入单张或多张图片/视频
-- 调用摄像头读取视频流，以及摄像头校准
-- 执行装备识别，计划支持本地识别，并预留服务器识别能力
-- 导出结果图像/视频
+`Contracts` 负责统一同为 ONNX 但输出格式不同的检测模型，当前优先支持：
 
-当前前端界面已按以下流程组织：
+- `ultralytics-yolo-detect`
+- `ultralytics-rtdetr`
+- `hf-detr-like`
 
-1. 概览
-2. 导入与采集
-3. 执行检测
-4. 结果与导出
+成功标志：
 
-当前识别能力规划：
+- `pytorch-training/4CImageSeg.Training/training_result` 下的所有 ONNX 模型都能被前端导入逻辑识别出契约 family
 
-- 浏览器端本地识别：已完成单图识别闭环
-- 服务器端识别：保留任务接口，真实推理后续实现
-- `ONNX`：计划作为浏览器端与服务器端统一的模型部署格式
+## 常用命令
 
-## 项目组成
-
-- 解决方案文件：`4CImageSeg.slnx`
-- SDK 约束：`global.json` 当前锁定 `.NET SDK 10.0.201`
-- 编排入口：`4CImageSeg.AppHost`
-- API：`4CImageSeg.ApiService`
-- 前端宿主：`4CImageSeg.Web`
-- 前端客户端：`4CImageSeg.Web.Client`
-- 测试项目：`4CImageSeg.Tests`
-- 公共默认配置：`4CImageSeg.ServiceDefaults`
-
-## 构建与部署
-
-- 本机命令行构建：
+安装依赖：
 
 ```powershell
-dotnet build .\4CImageSeg.slnx
+npm install
 ```
 
-- 在解决方案中构建：
-如需运行 Aspire 编排宿主，可从 `4CImageSeg.AppHost` 启动。
+`aspire run` 会直接执行根目录 `apphost.ts`，因此根目录 `node_modules` 必须包含 AppHost 运行时依赖；如果出现 `Cannot find package 'vscode-jsonrpc' imported from .modules\\transport.ts`，先重新执行一次 `npm install`。
 
-- 部署到服务器
-如需部署，建议使用Aspire生成Docker镜像和Docker Compose配置文件后，通过Docker或Podman部署。
+生成 Aspire TS SDK：
 
-## 当前状态
+```powershell
+aspire restore
+```
 
-已完成：
+启动开发环境：
 
-- 基本项目结构搭建与解决方案配置
-- Aspire 示例骨架已替换为业务应用骨架
-- 已完成全局布局、页面结构、侧边导航、底栏和UI文案编写
-- 已实现导入图片/视频，实现读取摄像头视频流和摄像头校准功能
-- 已完成识别 API 骨架、统一识别契约与基本任务提交流程
-- 已完成浏览器端单图识别闭环，支持结果叠加显示与结果图、JSON 导出
+```powershell
+npm run dev
+```
 
-未完成：
+构建：
 
-- 真实图片上传与媒体持久化
-- 多图识别闭环
-- 服务器识别闭环
-- 视频导出闭环
-- 视频逐帧识别与摄像头实时识别
-- 数据集、训练、模型版本管理与部署完善
-- 
+```powershell
+npm run build
+```
+
+验证：
+
+```powershell
+npm run test
+```

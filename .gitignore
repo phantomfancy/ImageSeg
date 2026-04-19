@@ -5,13 +5,17 @@
 ## Get latest from https://github.com/github/gitignore/blob/main/VisualStudio.gitignore
 
 # our project-specific files
-.dotnet/
-.dotnet-cli/
-4CImageSeg.Training/dataset*
-4CImageSeg.Training/runs
+.dotnet*/
+.dotnet-cli*/
+.npm/
+.npm-*/
+.modules/
 *.onnx
 *.pt
+dataset*/
 runs/
+pytorch-training/4CImageSeg.Training/dataset*
+pytorch-training/4CImageSeg.Training/runs
 
 # User-specific files
 *.rsuser

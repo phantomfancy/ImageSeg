@@ -1,5 +1,22 @@
 {
-    "appHost": {
-        "path": "4CImageSeg.AppHost\\4CImageSeg.AppHost.csproj"
+  "appHost": {
+    "path": "apphost.ts",
+    "language": "typescript/nodejs"
+  },
+  "sdk": {
+    "version": "13.2.0"
+  },
+  "channel": "stable",
+  "profiles": {
+    "https": {
+      "applicationUrl": "https://localhost:17134;http://localhost:15170",
+      "environmentVariables": {
+        "ASPIRE_DASHBOARD_OTLP_ENDPOINT_URL": "https://localhost:21030",
+        "ASPIRE_RESOURCE_SERVICE_ENDPOINT_URL": "https://localhost:22057"
+      }
     }
+  },
+  "packages": {
+    "Aspire.Hosting.JavaScript": "13.2.0"
+  }
 }

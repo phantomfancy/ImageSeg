@@ -1,0 +1,614 @@
+export type ModelFamily = 'hf-detr-like' | 'ultralytics-yolo-detect' | 'ultralytics-rtdetr'
+
+export type OutputLayoutKind = 'logits-and-pred-boxes' | 'ultralytics-anchors' | 'ultralytics-queries'
+
+export type LabelSourceKind = 'sidecar-manifest' | 'embedded-metadata' | 'fallback-class-index'
+
+export interface TensorDescriptor {
+  name: string
+  dimensions: Array<number | null>
+}
+
+export interface RuntimeValueMetadata {
+  name: string
+  isTensor?: boolean
+  shape?: readonly unknown[]
+  dimensions?: readonly unknown[]
+}
+
+export interface RuntimeCompatibility {
+  supportsOnnxRuntime: boolean
+  supportsOnnxRuntimeWeb: boolean
+  preferredExecutionProviders: string[]
+}
+
+export interface PreprocessContract {
+  inputTensorName: string
+  imageWidth: number
+  imageHeight: number
+  layout: 'nchw'
+  channelOrder: 'rgb'
+  resizeMode: 'stretch'
+  normalization: 'zero-to-one'
+}
+
+export interface DecoderContract {
+  layoutKind: OutputLayoutKind
+  outputTensorNames: string[]
+  scoreThreshold: number
+  maxDetections: number
+}
+
+export interface ModelManifest {
+  schemaVersion: string
+  displayName: string
+  family: ModelFamily
+  runtimeHints: RuntimeCompatibility
+  preprocess: PreprocessContract
+  decoder: DecoderContract
+  labels: Record<number, string>
+}
+
+export interface ResolvedModelContract {
+  displayName: string
+  family: ModelFamily
+  runtimeHints: RuntimeCompatibility
+  preprocess: PreprocessContract
+  decoder: DecoderContract
+  labels: Record<number, string>
+  labelSource: LabelSourceKind
+  warnings: string[]
+  inputs: TensorDescriptor[]
+  outputs: TensorDescriptor[]
+}
+
+export interface DetectionBox {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface Detection {
+  label: string
+  confidence: number
+  box: DetectionBox
+}
+
+export interface RecognitionResult {
+  inputSource: string
+  modelVersion: string
+  detectedAtUtc: string
+  detections: Detection[]
+}
+
+export interface TensorLike {
+  dims: readonly number[]
+  data: ArrayLike<number>
+}
+
+export type MetadataEntries = Map<string, string> | Record<string, string> | null | undefined
+
+const defaultRuntimeCompatibility: RuntimeCompatibility = {
+  supportsOnnxRuntime: true,
+  supportsOnnxRuntimeWeb: true,
+  preferredExecutionProviders: ['webgpu', 'wasm'],
+}
+
+export const knownModelContracts: Record<ModelFamily, ModelManifest> = {
+  'hf-detr-like': {
+    schemaVersion: '2026-04-19',
+    displayName: 'Hugging Face / DETR-like ONNX',
+    family: 'hf-detr-like',
+    runtimeHints: defaultRuntimeCompatibility,
+    preprocess: {
+      inputTensorName: 'pixel_values',
+      imageWidth: 640,
+      imageHeight: 640,
+      layout: 'nchw',
+      channelOrder: 'rgb',
+      resizeMode: 'stretch',
+      normalization: 'zero-to-one',
+    },
+    decoder: {
+      layoutKind: 'logits-and-pred-boxes',
+      outputTensorNames: ['logits', 'pred_boxes'],
+      scoreThreshold: 0.35,
+      maxDetections: 20,
+    },
+    labels: {},
+  },
+  'ultralytics-yolo-detect': {
+    schemaVersion: '2026-04-19',
+    displayName: 'Ultralytics YOLO Detect ONNX',
+    family: 'ultralytics-yolo-detect',
+    runtimeHints: defaultRuntimeCompatibility,
+    preprocess: {
+      inputTensorName: 'images',
+      imageWidth: 640,
+      imageHeight: 640,
+      layout: 'nchw',
+      channelOrder: 'rgb',
+      resizeMode: 'stretch',
+      normalization: 'zero-to-one',
+    },
+    decoder: {
+      layoutKind: 'ultralytics-anchors',
+      outputTensorNames: ['output0'],
+      scoreThreshold: 0.35,
+      maxDetections: 20,
+    },
+    labels: {},
+  },
+  'ultralytics-rtdetr': {
+    schemaVersion: '2026-04-19',
+    displayName: 'Ultralytics RT-DETR ONNX',
+    family: 'ultralytics-rtdetr',
+    runtimeHints: defaultRuntimeCompatibility,
+    preprocess: {
+      inputTensorName: 'images',
+      imageWidth: 640,
+      imageHeight: 640,
+      layout: 'nchw',
+      channelOrder: 'rgb',
+      resizeMode: 'stretch',
+      normalization: 'zero-to-one',
+    },
+    decoder: {
+      layoutKind: 'ultralytics-queries',
+      outputTensorNames: ['output0'],
+      scoreThreshold: 0.35,
+      maxDetections: 20,
+    },
+    labels: {},
+  },
+}
+
+export function detectModelFamily(inputs: TensorDescriptor[], outputs: TensorDescriptor[]): ModelFamily {
+  if (outputs.some((item) => item.name.toLowerCase() === 'logits') &&
+      outputs.some((item) => item.name.toLowerCase() === 'pred_boxes')) {
+    return 'hf-detr-like'
+  }
+
+  if (outputs.length !== 1 || outputs[0].dimensions.length !== 3) {
+    throw new Error('无法根据模型输入输出签名识别模型格式。')
+  }
+
+  const [, dim1, dim2] = outputs[0].dimensions
+  if (typeof dim1 === 'number' && typeof dim2 === 'number') {
+    return dim1 > dim2 ? 'ultralytics-rtdetr' : 'ultralytics-yolo-detect'
+  }
+
+  if (inputs.some((item) => item.name.toLowerCase() === 'images')) {
+    return 'ultralytics-yolo-detect'
+  }
+
+  throw new Error('无法根据模型输入输出签名识别模型格式。')
+}
+
+export function toTensorDescriptors(metadata: readonly RuntimeValueMetadata[]): TensorDescriptor[] {
+  return metadata.map((item) => ({
+    name: item.name,
+    dimensions: normalizeDimensions(item),
+  }))
+}
+
+export function resolveLabelsFromMetadata(entries: MetadataEntries): Record<number, string> {
+  if (!entries) {
+    return {}
+  }
+
+  const normalized = entries instanceof Map
+    ? Object.fromEntries(entries.entries())
+    : entries
+
+  const candidates = [
+    normalized.labels,
+    normalized.names,
+    normalized.id2label,
+  ]
+
+  for (const candidate of candidates) {
+    const parsed = tryParseLabelPayload(candidate)
+    if (Object.keys(parsed).length > 0) {
+      return parsed
+    }
+  }
+
+  return {}
+}
+
+export function resolveModelContract(options: {
+  inputs: TensorDescriptor[]
+  outputs: TensorDescriptor[]
+  manifest?: ModelManifest
+  displayName?: string
+  labels?: Record<number, string>
+}): ResolvedModelContract {
+  const family = options.manifest?.family ?? detectModelFamily(options.inputs, options.outputs)
+  const defaults = knownModelContracts[family]
+  const input = options.inputs[0]
+  const inputWidth = input?.dimensions.at(-1)
+  const inputHeight = input?.dimensions.at(-2)
+  const warnings: string[] = []
+  const labels = options.labels ?? options.manifest?.labels ?? defaults.labels
+  const labelSource: LabelSourceKind =
+    options.labels ? 'embedded-metadata' :
+      options.manifest ? 'sidecar-manifest' :
+        'fallback-class-index'
+
+  if (Object.keys(labels).length === 0) {
+    warnings.push('模型未提供类别标签，将使用 class-N 占位标签。')
+  }
+
+  return {
+    displayName: options.displayName?.trim() || options.manifest?.displayName || defaults.displayName,
+    family,
+    runtimeHints: options.manifest?.runtimeHints ?? defaults.runtimeHints,
+    preprocess: {
+      ...(options.manifest?.preprocess ?? defaults.preprocess),
+      inputTensorName: options.manifest?.preprocess.inputTensorName ?? input?.name ?? defaults.preprocess.inputTensorName,
+      imageWidth: typeof inputWidth === 'number' ? inputWidth : (options.manifest?.preprocess.imageWidth ?? defaults.preprocess.imageWidth),
+      imageHeight: typeof inputHeight === 'number' ? inputHeight : (options.manifest?.preprocess.imageHeight ?? defaults.preprocess.imageHeight),
+    },
+    decoder: {
+      ...(options.manifest?.decoder ?? defaults.decoder),
+      outputTensorNames: options.manifest?.decoder.outputTensorNames?.length
+        ? options.manifest.decoder.outputTensorNames
+        : options.outputs.map((item) => item.name),
+    },
+    labels,
+    labelSource,
+    warnings,
+    inputs: options.inputs,
+    outputs: options.outputs,
+  }
+}
+
+export function resolveLabel(contract: ResolvedModelContract, classId: number): string {
+  return contract.labels[classId] ?? `class-${classId}`
+}
+
+export function normalizeScore(value: number): number {
+  return value >= 0 && value <= 1 ? value : sigmoid(value)
+}
+
+export function sigmoid(value: number): number {
+  return 1 / (1 + Math.exp(-value))
+}
+
+export function decodeDetections(
+  contract: ResolvedModelContract,
+  outputs: Record<string, TensorLike>,
+  imageWidth: number,
+  imageHeight: number,
+): Detection[] {
+  switch (contract.decoder.layoutKind) {
+    case 'logits-and-pred-boxes':
+      return decodeHfDetrLike(contract, outputs, imageWidth, imageHeight)
+    case 'ultralytics-anchors':
+      return decodeUltralyticsAnchors(contract, outputs, imageWidth, imageHeight)
+    case 'ultralytics-queries':
+      return decodeUltralyticsQueries(contract, outputs, imageWidth, imageHeight)
+    default:
+      throw new Error(`不支持的输出布局：${contract.decoder.layoutKind}`)
+  }
+}
+
+function decodeHfDetrLike(
+  contract: ResolvedModelContract,
+  outputs: Record<string, TensorLike>,
+  imageWidth: number,
+  imageHeight: number,
+): Detection[] {
+  const logits = resolveTensor(outputs, contract.decoder.outputTensorNames, 'logits')
+  const boxes = resolveTensor(outputs, contract.decoder.outputTensorNames, 'pred_boxes')
+  const queryCount = logits.dims.at(-2) ?? 0
+  const classCount = logits.dims.at(-1) ?? 0
+  const detections: Detection[] = []
+
+  for (let queryIndex = 0; queryIndex < queryCount; queryIndex += 1) {
+    let bestClassId = 0
+    let bestScore = 0
+
+    if (classCount === 1) {
+      bestScore = sigmoid(readLogits(logits, queryIndex, 0))
+    } else {
+      const probabilities = softmax(logits, queryIndex, classCount)
+      for (let classIndex = 0; classIndex < classCount; classIndex += 1) {
+        if (probabilities[classIndex] > bestScore) {
+          bestScore = probabilities[classIndex]
+          bestClassId = classIndex
+        }
+      }
+    }
+
+    if (bestScore < contract.decoder.scoreThreshold) {
+      continue
+    }
+
+    detections.push({
+      label: resolveLabel(contract, bestClassId),
+      confidence: bestScore,
+      box: toImageBox(
+        readBoxes(boxes, queryIndex, 0),
+        readBoxes(boxes, queryIndex, 1),
+        readBoxes(boxes, queryIndex, 2),
+        readBoxes(boxes, queryIndex, 3),
+        imageWidth,
+        imageHeight,
+        true,
+      ),
+    })
+  }
+
+  return finalizeDetections(detections, contract.decoder.maxDetections)
+}
+
+function decodeUltralyticsAnchors(
+  contract: ResolvedModelContract,
+  outputs: Record<string, TensorLike>,
+  imageWidth: number,
+  imageHeight: number,
+): Detection[] {
+  const output = resolveTensor(outputs, contract.decoder.outputTensorNames, 'output0')
+  const channelCount = output.dims[1] ?? 0
+  const anchorCount = output.dims[2] ?? 0
+  const classCount = Math.max(1, channelCount - 4)
+  const normalized = guessNormalized(output, anchorCount, true)
+  const scaleX = normalized ? imageWidth : imageWidth / contract.preprocess.imageWidth
+  const scaleY = normalized ? imageHeight : imageHeight / contract.preprocess.imageHeight
+  const detections: Detection[] = []
+
+  for (let anchorIndex = 0; anchorIndex < anchorCount; anchorIndex += 1) {
+    let bestClassId = 0
+    let bestScore = 0
+
+    for (let classIndex = 0; classIndex < classCount; classIndex += 1) {
+      const score = normalizeScore(readAnchor(output, classIndex + 4, anchorIndex))
+      if (score > bestScore) {
+        bestScore = score
+        bestClassId = classIndex
+      }
+    }
+
+    if (bestScore < contract.decoder.scoreThreshold) {
+      continue
+    }
+
+    detections.push({
+      label: resolveLabel(contract, bestClassId),
+      confidence: bestScore,
+      box: toImageBox(
+        readAnchor(output, 0, anchorIndex),
+        readAnchor(output, 1, anchorIndex),
+        readAnchor(output, 2, anchorIndex),
+        readAnchor(output, 3, anchorIndex),
+        scaleX,
+        scaleY,
+        normalized,
+      ),
+    })
+  }
+
+  return finalizeDetections(detections, contract.decoder.maxDetections)
+}
+
+function decodeUltralyticsQueries(
+  contract: ResolvedModelContract,
+  outputs: Record<string, TensorLike>,
+  imageWidth: number,
+  imageHeight: number,
+): Detection[] {
+  const output = resolveTensor(outputs, contract.decoder.outputTensorNames, 'output0')
+  const queryCount = output.dims[1] ?? 0
+  const vectorLength = output.dims[2] ?? 0
+  const classCount = Math.max(1, vectorLength - 4)
+  const normalized = guessNormalized(output, queryCount, false)
+  const scaleX = normalized ? imageWidth : imageWidth / contract.preprocess.imageWidth
+  const scaleY = normalized ? imageHeight : imageHeight / contract.preprocess.imageHeight
+  const detections: Detection[] = []
+
+  for (let queryIndex = 0; queryIndex < queryCount; queryIndex += 1) {
+    let bestClassId = 0
+    let bestScore = 0
+
+    for (let classIndex = 0; classIndex < classCount; classIndex += 1) {
+      const score = normalizeScore(readQuery(output, queryIndex, classIndex + 4))
+      if (score > bestScore) {
+        bestScore = score
+        bestClassId = classIndex
+      }
+    }
+
+    if (bestScore < contract.decoder.scoreThreshold) {
+      continue
+    }
+
+    detections.push({
+      label: resolveLabel(contract, bestClassId),
+      confidence: bestScore,
+      box: toImageBox(
+        readQuery(output, queryIndex, 0),
+        readQuery(output, queryIndex, 1),
+        readQuery(output, queryIndex, 2),
+        readQuery(output, queryIndex, 3),
+        scaleX,
+        scaleY,
+        normalized,
+      ),
+    })
+  }
+
+  return finalizeDetections(detections, contract.decoder.maxDetections)
+}
+
+function resolveTensor(
+  outputs: Record<string, TensorLike>,
+  preferredNames: string[],
+  expectedName: string,
+): TensorLike {
+  for (const name of preferredNames) {
+    const tensor = outputs[name]
+    if (tensor) {
+      return tensor
+    }
+  }
+
+  const exactKey = Object.keys(outputs).find((item) => item.toLowerCase() === expectedName.toLowerCase())
+  if (exactKey) {
+    return outputs[exactKey]
+  }
+
+  const partialKey = Object.keys(outputs).find((item) => item.toLowerCase().includes(expectedName.toLowerCase()))
+  if (partialKey) {
+    return outputs[partialKey]
+  }
+
+  throw new Error(`模型输出中未找到 ${expectedName}`)
+}
+
+function readLogits(tensor: TensorLike, queryIndex: number, classIndex: number): number {
+  const classCount = tensor.dims.at(-1) ?? 0
+  return Number(tensor.data[queryIndex * classCount + classIndex] ?? 0)
+}
+
+function readBoxes(tensor: TensorLike, queryIndex: number, itemIndex: number): number {
+  return Number(tensor.data[queryIndex * 4 + itemIndex] ?? 0)
+}
+
+function readAnchor(tensor: TensorLike, channelIndex: number, anchorIndex: number): number {
+  const anchorCount = tensor.dims[2] ?? 0
+  return Number(tensor.data[channelIndex * anchorCount + anchorIndex] ?? 0)
+}
+
+function readQuery(tensor: TensorLike, queryIndex: number, itemIndex: number): number {
+  const vectorLength = tensor.dims[2] ?? 0
+  return Number(tensor.data[queryIndex * vectorLength + itemIndex] ?? 0)
+}
+
+function softmax(tensor: TensorLike, queryIndex: number, classCount: number): number[] {
+  const values = new Array<number>(classCount).fill(0)
+  let maxValue = Number.NEGATIVE_INFINITY
+
+  for (let classIndex = 0; classIndex < classCount; classIndex += 1) {
+    const current = readLogits(tensor, queryIndex, classIndex)
+    if (current > maxValue) {
+      maxValue = current
+    }
+  }
+
+  let sum = 0
+  for (let classIndex = 0; classIndex < classCount; classIndex += 1) {
+    values[classIndex] = Math.exp(readLogits(tensor, queryIndex, classIndex) - maxValue)
+    sum += values[classIndex]
+  }
+
+  if (sum <= 0) {
+    return values
+  }
+
+  return values.map((item) => item / sum)
+}
+
+function guessNormalized(tensor: TensorLike, itemCount: number, anchorLayout: boolean): boolean {
+  let maxAbs = 0
+  const scanCount = Math.min(itemCount, 8)
+
+  for (let index = 0; index < scanCount; index += 1) {
+    const values = anchorLayout
+      ? [
+        readAnchor(tensor, 0, index),
+        readAnchor(tensor, 1, index),
+        readAnchor(tensor, 2, index),
+        readAnchor(tensor, 3, index),
+      ]
+      : [
+        readQuery(tensor, index, 0),
+        readQuery(tensor, index, 1),
+        readQuery(tensor, index, 2),
+        readQuery(tensor, index, 3),
+      ]
+
+    for (const value of values) {
+      maxAbs = Math.max(maxAbs, Math.abs(value))
+    }
+  }
+
+  return maxAbs <= 2
+}
+
+function toImageBox(
+  cx: number,
+  cy: number,
+  width: number,
+  height: number,
+  scaleX: number,
+  scaleY: number,
+  normalized: boolean,
+): DetectionBox {
+  const left = (cx - width / 2) * scaleX
+  const top = (cy - height / 2) * scaleY
+  const right = (cx + width / 2) * scaleX
+  const bottom = (cy + height / 2) * scaleY
+  const maxX = normalized ? scaleX : scaleX * 640
+  const maxY = normalized ? scaleY : scaleY * 640
+
+  return {
+    x: clamp(left, 0, maxX),
+    y: clamp(top, 0, maxY),
+    width: Math.max(0, clamp(right, 0, maxX) - clamp(left, 0, maxX)),
+    height: Math.max(0, clamp(bottom, 0, maxY) - clamp(top, 0, maxY)),
+  }
+}
+
+function finalizeDetections(detections: Detection[], maxDetections: number): Detection[] {
+  return [...detections]
+    .sort((left, right) => right.confidence - left.confidence)
+    .slice(0, maxDetections)
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max)
+}
+
+function normalizeDimensions(item: RuntimeValueMetadata): Array<number | null> {
+  if (item.isTensor === false) {
+    return []
+  }
+
+  const rawDimensions = item.shape ?? item.dimensions ?? []
+  return Array.from(rawDimensions, (dimension) => typeof dimension === 'number' ? dimension : null)
+}
+
+function tryParseLabelPayload(payload: string | undefined): Record<number, string> {
+  if (!payload?.trim()) {
+    return {}
+  }
+
+  const candidates = [payload]
+  if (payload.includes("'")) {
+    candidates.push(payload.replaceAll("'", '"'))
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown
+      if (Array.isArray(parsed)) {
+        return Object.fromEntries(parsed.map((item, index) => [index, String(item)]))
+      }
+
+      if (parsed && typeof parsed === 'object') {
+        return Object.fromEntries(
+          Object.entries(parsed)
+            .filter(([key]) => !Number.isNaN(Number(key)))
+            .map(([key, value]) => [Number(key), String(value)]),
+        )
+      }
+    } catch {
+      continue
+    }
+  }
+
+  return {}
+}

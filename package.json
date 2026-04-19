@@ -1,0 +1,23 @@
+{
+  "name": "4cimageseg",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "web-app/contracts",
+    "web-app/frontend"
+  ],
+  "dependencies": {
+    "vscode-jsonrpc": "^8.2.1"
+  },
+  "scripts": {
+    "start": "aspire run",
+    "dev": "aspire run",
+    "restore:aspire": "aspire restore",
+    "build": "npm run build --workspace @4cimageseg/contracts && npm run build --workspace @4cimageseg/frontend",
+    "lint": "npm run lint --workspace @4cimageseg/frontend",
+    "test:contracts": "npm run test --workspace @4cimageseg/contracts",
+    "test:frontend": "npm run test --workspace @4cimageseg/frontend",
+    "verify:training-models": "node --experimental-strip-types ./scripts/verify-training-models.ts",
+    "test": "npm run test:contracts && npm run test:frontend && npm run verify:training-models"
+  }
+}
