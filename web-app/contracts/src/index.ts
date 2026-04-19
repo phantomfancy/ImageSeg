@@ -4,9 +4,11 @@ export type OutputLayoutKind = 'logits-and-pred-boxes' | 'ultralytics-anchors' |
 
 export type LabelSourceKind = 'sidecar-manifest' | 'embedded-metadata' | 'fallback-class-index'
 
+export type TensorDimension = number | string | null
+
 export interface TensorDescriptor {
   name: string
-  dimensions: Array<number | null>
+  dimensions: Array<TensorDimension>
 }
 
 export interface RuntimeValueMetadata {
@@ -28,7 +30,7 @@ export interface PreprocessContract {
   imageHeight: number
   layout: 'nchw'
   channelOrder: 'rgb'
-  resizeMode: 'stretch'
+  resizeMode: 'stretch' | 'pad'
   normalization: 'zero-to-one'
 }
 
@@ -87,7 +89,7 @@ export interface TensorLike {
   data: ArrayLike<number>
 }
 
-export type MetadataEntries = Map<string, string> | Record<string, string> | null | undefined
+export type MetadataEntries = Map<string, unknown> | Record<string, unknown> | null | undefined
 
 const defaultRuntimeCompatibility: RuntimeCompatibility = {
   supportsOnnxRuntime: true,
@@ -209,7 +211,7 @@ export function resolveLabelsFromMetadata(entries: MetadataEntries): Record<numb
   ]
 
   for (const candidate of candidates) {
-    const parsed = tryParseLabelPayload(candidate)
+    const parsed = toLabelRecord(candidate)
     if (Object.keys(parsed).length > 0) {
       return parsed
     }
@@ -224,18 +226,23 @@ export function resolveModelContract(options: {
   manifest?: ModelManifest
   displayName?: string
   labels?: Record<number, string>
+  labelSource?: LabelSourceKind
+  preprocess?: Partial<PreprocessContract>
+  warnings?: string[]
 }): ResolvedModelContract {
   const family = options.manifest?.family ?? detectModelFamily(options.inputs, options.outputs)
   const defaults = knownModelContracts[family]
   const input = options.inputs[0]
   const inputWidth = input?.dimensions.at(-1)
   const inputHeight = input?.dimensions.at(-2)
-  const warnings: string[] = []
+  const warnings = [...(options.warnings ?? [])]
   const labels = options.labels ?? options.manifest?.labels ?? defaults.labels
   const labelSource: LabelSourceKind =
-    options.labels ? 'embedded-metadata' :
-      options.manifest ? 'sidecar-manifest' :
-        'fallback-class-index'
+    options.labelSource ??
+    (options.manifest ? 'sidecar-manifest' :
+      options.labels ? 'embedded-metadata' :
+        'fallback-class-index')
+  const preprocess = options.preprocess ?? {}
 
   if (Object.keys(labels).length === 0) {
     warnings.push('模型未提供类别标签，将使用 class-N 占位标签。')
@@ -247,9 +254,19 @@ export function resolveModelContract(options: {
     runtimeHints: options.manifest?.runtimeHints ?? defaults.runtimeHints,
     preprocess: {
       ...(options.manifest?.preprocess ?? defaults.preprocess),
-      inputTensorName: options.manifest?.preprocess.inputTensorName ?? input?.name ?? defaults.preprocess.inputTensorName,
-      imageWidth: typeof inputWidth === 'number' ? inputWidth : (options.manifest?.preprocess.imageWidth ?? defaults.preprocess.imageWidth),
-      imageHeight: typeof inputHeight === 'number' ? inputHeight : (options.manifest?.preprocess.imageHeight ?? defaults.preprocess.imageHeight),
+      inputTensorName: preprocess.inputTensorName ?? options.manifest?.preprocess.inputTensorName ?? input?.name ?? defaults.preprocess.inputTensorName,
+      imageWidth: typeof preprocess.imageWidth === 'number'
+        ? preprocess.imageWidth
+        : typeof inputWidth === 'number'
+          ? inputWidth
+          : (options.manifest?.preprocess.imageWidth ?? defaults.preprocess.imageWidth),
+      imageHeight: typeof preprocess.imageHeight === 'number'
+        ? preprocess.imageHeight
+        : typeof inputHeight === 'number'
+          ? inputHeight
+          : (options.manifest?.preprocess.imageHeight ?? defaults.preprocess.imageHeight),
+      resizeMode: preprocess.resizeMode ?? options.manifest?.preprocess.resizeMode ?? defaults.preprocess.resizeMode,
+      normalization: preprocess.normalization ?? options.manifest?.preprocess.normalization ?? defaults.preprocess.normalization,
     },
     decoder: {
       ...(options.manifest?.decoder ?? defaults.decoder),
@@ -572,43 +589,61 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
 }
 
-function normalizeDimensions(item: RuntimeValueMetadata): Array<number | null> {
+function normalizeDimensions(item: RuntimeValueMetadata): Array<TensorDimension> {
   if (item.isTensor === false) {
     return []
   }
 
   const rawDimensions = item.shape ?? item.dimensions ?? []
-  return Array.from(rawDimensions, (dimension) => typeof dimension === 'number' ? dimension : null)
+  return Array.from(rawDimensions, (dimension) =>
+    typeof dimension === 'number'
+      ? dimension
+      : typeof dimension === 'string' && dimension.trim()
+        ? dimension
+        : null)
 }
 
-function tryParseLabelPayload(payload: string | undefined): Record<number, string> {
-  if (!payload?.trim()) {
+export function toLabelRecord(payload: unknown): Record<number, string> {
+  if (payload === null || payload === undefined) {
     return {}
   }
 
-  const candidates = [payload]
-  if (payload.includes("'")) {
-    candidates.push(payload.replaceAll("'", '"'))
+  if (Array.isArray(payload)) {
+    return Object.fromEntries(payload.map((item, index) => [index, String(item)]))
+  }
+
+  if (typeof payload === 'object') {
+    return Object.fromEntries(
+      Object.entries(payload)
+        .filter(([key]) => !Number.isNaN(Number(key)))
+        .map(([key, value]) => [Number(key), String(value)]),
+    )
+  }
+
+  if (typeof payload !== 'string' || !payload.trim()) {
+    return {}
+  }
+
+  const candidates = [payload.trim()]
+  const pythonLike = normalizePythonLikeObjectLiteral(payload.trim())
+  if (pythonLike !== payload.trim()) {
+    candidates.push(pythonLike)
   }
 
   for (const candidate of candidates) {
     try {
       const parsed = JSON.parse(candidate) as unknown
-      if (Array.isArray(parsed)) {
-        return Object.fromEntries(parsed.map((item, index) => [index, String(item)]))
-      }
-
-      if (parsed && typeof parsed === 'object') {
-        return Object.fromEntries(
-          Object.entries(parsed)
-            .filter(([key]) => !Number.isNaN(Number(key)))
-            .map(([key, value]) => [Number(key), String(value)]),
-        )
-      }
+      return toLabelRecord(parsed)
     } catch {
       continue
     }
   }
 
   return {}
+}
+
+function normalizePythonLikeObjectLiteral(value: string): string {
+  return value
+    .replace(/([{,]\s*)([A-Za-z0-9_]+)\s*:/g, '$1"$2":')
+    .replaceAll("'", '"')
 }

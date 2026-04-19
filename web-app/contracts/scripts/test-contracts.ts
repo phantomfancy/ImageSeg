@@ -4,6 +4,7 @@ import {
   decodeDetections,
   resolveLabelsFromMetadata,
   resolveModelContract,
+  toLabelRecord,
   toTensorDescriptors,
   type TensorLike,
 } from '../src/index.ts'
@@ -47,6 +48,21 @@ assert.equal(ultralyticsRtDetrContract.family, 'ultralytics-rtdetr')
 
 assert.deepEqual(resolveLabelsFromMetadata({
   names: '{"0":"himars","1":"radar"}',
+}), {
+  0: 'himars',
+  1: 'radar',
+})
+
+assert.deepEqual(toLabelRecord("{0: 'Aircraft', 1: 'uav'}"), {
+  0: 'Aircraft',
+  1: 'uav',
+})
+
+assert.deepEqual(resolveLabelsFromMetadata({
+  id2label: {
+    0: 'himars',
+    1: 'radar',
+  },
 }), {
   0: 'himars',
   1: 'radar',

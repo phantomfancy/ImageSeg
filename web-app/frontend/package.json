@@ -4,12 +4,13 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "prepare:ort": "node ./scripts/copy-ort-assets.mjs",
+    "prepare:ort": "node ./scripts/generate-onnx-proto-source.mjs && node ./scripts/copy-ort-assets.mjs",
     "dev": "npm run prepare:ort && vite --configLoader native",
     "build": "npm run prepare:ort && tsc -b && vite build --configLoader native",
     "typecheck": "tsc -b --pretty false",
     "lint": "eslint .",
-    "test": "npm run prepare:ort && npm run lint && npm run typecheck",
+    "test:model-package": "node --experimental-strip-types ./scripts/test-model-package.ts",
+    "test": "npm run prepare:ort && npm run lint && npm run typecheck && npm run test:model-package",
     "preview": "vite preview"
   },
   "dependencies": {

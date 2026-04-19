@@ -1,12 +1,15 @@
 import * as ort from 'onnxruntime-web/webgpu'
 import {
   decodeDetections,
-  resolveModelContract,
   type RecognitionResult,
   type ResolvedModelContract,
   type TensorLike,
-} from '@contracts'
-import { inspectOnnxModelBytes } from './modelIntrospection'
+} from '../../../contracts/src/index.ts'
+import {
+  finalizeModelImport,
+  type FinalizeModelImportOptions,
+  type InspectedModelPackage,
+} from './modelPackage.ts'
 
 ort.env.wasm.proxy = false
 ort.env.wasm.numThreads = 1
@@ -22,6 +25,7 @@ if (ort.env.webgpu) {
 type SessionState = {
   session: ort.InferenceSession
   providerName: 'webgpu' | 'wasm'
+  fallbackReason?: string
 }
 
 const sessionCache = new Map<string, Promise<SessionState>>()
@@ -30,41 +34,45 @@ export interface ImportedModel {
   key: string
   fileName: string
   bytes: Uint8Array
-  contract: ResolvedModelContract
+  contract: InspectedModelPackage['contract']
   providerName: 'webgpu' | 'wasm' | 'unavailable'
+  fallbackReason?: string
+  sidecars: InspectedModelPackage['sidecars']
 }
 
 export interface DetectionRun {
   providerName: 'webgpu' | 'wasm'
-  annotatedImageDataUrl: string
+  fallbackReason?: string
+  annotatedCanvas: HTMLCanvasElement
   recognitionResult: RecognitionResult
 }
 
-export async function inspectImportedModel(file: File): Promise<ImportedModel> {
-  const bytes = new Uint8Array(await file.arrayBuffer())
-  const key = `${file.name}:${file.size}:${file.lastModified}`
-  const parsedModel = inspectOnnxModelBytes(bytes)
-  const contract = resolveModelContract({
-    inputs: parsedModel.inputs,
-    outputs: parsedModel.outputs,
-    displayName: file.name,
-    labels: parsedModel.labels,
-  })
+export async function inspectImportedModel(options: FinalizeModelImportOptions): Promise<ImportedModel> {
+  const inspectedPackage = await finalizeModelImport(options)
+  const {
+    key,
+    fileName,
+    bytes,
+    contract,
+    sidecars,
+  } = inspectedPackage
 
   try {
     const sessionState = await getSessionState(key, bytes)
 
     return {
       key,
-      fileName: file.name,
+      fileName,
       bytes,
       contract,
       providerName: sessionState.providerName,
+      fallbackReason: sessionState.fallbackReason,
+      sidecars,
     }
   } catch (error) {
     return {
       key,
-      fileName: file.name,
+      fileName,
       bytes,
       contract: {
         ...contract,
@@ -74,6 +82,7 @@ export async function inspectImportedModel(file: File): Promise<ImportedModel> {
         ],
       },
       providerName: 'unavailable',
+      sidecars,
     }
   }
 }
@@ -82,14 +91,20 @@ export async function runSingleImageDetection(
   model: ImportedModel,
   imageFile: File,
 ): Promise<DetectionRun> {
-  const sessionState = await getSessionState(model.key, model.bytes)
   const sourceCanvas = await loadImageCanvas(imageFile)
-  const inputTensor = createInputTensor(sourceCanvas, model.contract)
+  return runDetectionOnCanvas(model, sourceCanvas, imageFile.name)
+}
 
+export async function runDetectionOnCanvas(
+  model: ImportedModel,
+  sourceCanvas: HTMLCanvasElement,
+  inputSource: string,
+): Promise<DetectionRun> {
+  const sessionState = await getSessionState(model.key, model.bytes)
+  const inputTensor = createInputTensor(sourceCanvas, model.contract)
   const outputMap = await sessionState.session.run({
     [model.contract.preprocess.inputTensorName]: inputTensor,
   })
-
   const normalizedOutputs = await normalizeOutputs(outputMap)
   const detections = decodeDetections(
     model.contract,
@@ -100,9 +115,10 @@ export async function runSingleImageDetection(
 
   return {
     providerName: sessionState.providerName,
-    annotatedImageDataUrl: drawDetections(sourceCanvas, detections),
+    fallbackReason: sessionState.fallbackReason,
+    annotatedCanvas: drawDetections(sourceCanvas, detections),
     recognitionResult: {
-      inputSource: imageFile.name,
+      inputSource,
       modelVersion: model.fileName,
       detectedAtUtc: new Date().toISOString(),
       detections,
@@ -130,6 +146,7 @@ async function createSessionWithFallback(bytes: Uint8Array): Promise<SessionStat
     providerName: 'webgpu' | 'wasm'
     options: ort.InferenceSession.SessionOptions
   }> = []
+  let fallbackReason: string | undefined
 
   if (typeof navigator !== 'undefined' && 'gpu' in navigator) {
     plans.push({
@@ -138,6 +155,8 @@ async function createSessionWithFallback(bytes: Uint8Array): Promise<SessionStat
         executionProviders: ['webgpu'],
       },
     })
+  } else {
+    fallbackReason = '当前浏览器未提供 WebGPU，已使用 WASM。'
   }
 
   plans.push({
@@ -154,9 +173,14 @@ async function createSessionWithFallback(bytes: Uint8Array): Promise<SessionStat
       return {
         session,
         providerName: plan.providerName,
+        fallbackReason,
       }
     } catch (error) {
-      errors.push(`${plan.providerName}: ${formatError(error)}`)
+      const message = formatError(error)
+      errors.push(`${plan.providerName}: ${message}`)
+      if (plan.providerName === 'webgpu') {
+        fallbackReason = `WebGPU 初始化失败，已回退到 WASM：${message}`
+      }
     }
   }
 
@@ -215,6 +239,19 @@ async function loadImageCanvas(file: File): Promise<HTMLCanvasElement> {
   }
 }
 
+export function drawSourceToCanvas(
+  source: CanvasImageSource,
+  targetCanvas?: HTMLCanvasElement,
+): HTMLCanvasElement {
+  const { width, height } = resolveSourceDimensions(source)
+  const canvas = targetCanvas ?? document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const context = get2dContext(canvas)
+  context.drawImage(source, 0, 0, width, height)
+  return canvas
+}
+
 function createInputTensor(
   sourceCanvas: HTMLCanvasElement,
   contract: ResolvedModelContract,
@@ -253,11 +290,11 @@ function ensureNumericTensorData(data: ort.Tensor['data'], outputName: string): 
 function drawDetections(
   sourceCanvas: HTMLCanvasElement,
   detections: RecognitionResult['detections'],
-): string {
-  const canvas = document.createElement('canvas')
+  targetCanvas?: HTMLCanvasElement,
+): HTMLCanvasElement {
+  const canvas = targetCanvas ?? document.createElement('canvas')
   canvas.width = sourceCanvas.width
   canvas.height = sourceCanvas.height
-
   const context = get2dContext(canvas)
   context.drawImage(sourceCanvas, 0, 0)
   context.lineWidth = 3
@@ -280,7 +317,7 @@ function drawDetections(
     context.fillText(label, item.box.x + 7, textY + 5)
   })
 
-  return canvas.toDataURL('image/png')
+  return canvas
 }
 
 function get2dContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
@@ -290,6 +327,39 @@ function get2dContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
   }
 
   return context
+}
+
+function resolveSourceDimensions(source: CanvasImageSource): { width: number; height: number } {
+  if (source instanceof HTMLVideoElement) {
+    return {
+      width: source.videoWidth || source.clientWidth,
+      height: source.videoHeight || source.clientHeight,
+    }
+  }
+
+  if (source instanceof HTMLCanvasElement) {
+    return { width: source.width, height: source.height }
+  }
+
+  if (source instanceof ImageBitmap) {
+    return { width: source.width, height: source.height }
+  }
+
+  if (source instanceof HTMLImageElement) {
+    return {
+      width: source.naturalWidth || source.width,
+      height: source.naturalHeight || source.height,
+    }
+  }
+
+  if (typeof VideoFrame !== 'undefined' && source instanceof VideoFrame) {
+    return {
+      width: source.displayWidth || source.codedWidth,
+      height: source.displayHeight || source.codedHeight,
+    }
+  }
+
+  throw new Error('无法解析当前帧源的尺寸。')
 }
 
 function pickColor(index: number): string {

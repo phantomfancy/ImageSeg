@@ -10,6 +10,7 @@
 .npm/
 .npm-*/
 .modules/
+web-app/frontend/src/lib/onnxProtoSource.generated.ts
 *.onnx
 *.pt
 dataset*/

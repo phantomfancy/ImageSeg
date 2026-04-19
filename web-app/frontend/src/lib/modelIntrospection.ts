@@ -1,8 +1,8 @@
-import onnxProtoSource from '../../node_modules/onnxruntime-web/lib/onnxjs/ort-schema/protobuf/onnx.js?raw'
-import * as protobuf from 'protobufjs/minimal'
+import onnxProtoSource from './onnxProtoSource.generated.ts'
 
 import {
   resolveLabelsFromMetadata,
+  type TensorDimension,
   type TensorDescriptor,
 } from '../../../contracts/src/index.ts'
 
@@ -21,7 +21,8 @@ type ValueInfo = {
     tensorType?: {
       shape?: {
         dim?: Array<{
-          dimValue?: number | LongLike | null
+        dimValue?: number | LongLike | null
+          dimParam?: string | null
         }>
       }
     }
@@ -39,13 +40,13 @@ export interface ParsedOnnxModel {
   labels: Record<number, string>
 }
 
-let cachedOnnxProto:
-  | { onnx?: { ModelProto: { decode: (input: Uint8Array) => DecodedModel } } }
+let cachedOnnxProtoPromise:
+  | Promise<{ onnx?: { ModelProto: { decode: (input: Uint8Array) => DecodedModel } } }>
   | null
   = null
 
-export function inspectOnnxModelBytes(bytes: Uint8Array): ParsedOnnxModel {
-  const model = decodeModel(bytes)
+export async function inspectOnnxModelBytes(bytes: Uint8Array): Promise<ParsedOnnxModel> {
+  const model = await decodeModel(bytes)
   const initializerNames = new Set(
     (model.graph?.initializer ?? [])
       .map((item) => item.name ?? '')
@@ -75,8 +76,8 @@ export function inspectOnnxModelBytes(bytes: Uint8Array): ParsedOnnxModel {
   }
 }
 
-function decodeModel(bytes: Uint8Array): DecodedModel {
-  const onnxProto = getOnnxProto()
+async function decodeModel(bytes: Uint8Array): Promise<DecodedModel> {
+  const onnxProto = await getOnnxProto()
   const root = onnxProto.onnx
   if (!root?.ModelProto) {
     throw new Error('无法加载 ONNX protobuf 解析器。')
@@ -85,11 +86,61 @@ function decodeModel(bytes: Uint8Array): DecodedModel {
   return root.ModelProto.decode(bytes)
 }
 
-function getOnnxProto(): { onnx?: { ModelProto: { decode: (input: Uint8Array) => DecodedModel } } } {
-  if (cachedOnnxProto) {
-    return cachedOnnxProto
+async function getOnnxProto(): Promise<{ onnx?: { ModelProto: { decode: (input: Uint8Array) => DecodedModel } } }> {
+  if (cachedOnnxProtoPromise) {
+    return cachedOnnxProtoPromise
   }
 
+  cachedOnnxProtoPromise = loadOnnxProto()
+  return cachedOnnxProtoPromise
+}
+
+function toTensorDescriptor(valueInfo: ValueInfo): TensorDescriptor {
+  const dimensions = valueInfo.type?.tensorType?.shape?.dim?.map((item) => {
+    const dimValue = toTensorDimension(item.dimValue, item.dimParam)
+    return typeof dimValue === 'number' && Number.isFinite(dimValue)
+      ? dimValue
+      : typeof dimValue === 'string' && dimValue.trim()
+        ? dimValue
+        : null
+  }) ?? []
+
+  return {
+    name: valueInfo.name ?? '',
+    dimensions,
+  }
+}
+
+function toTensorDimension(
+  value: number | LongLike | null | undefined,
+  dimParam: string | null | undefined,
+): TensorDimension {
+  if (typeof value === 'number') {
+    return value
+  }
+
+  if (value && typeof value.toNumber === 'function') {
+    return value.toNumber()
+  }
+
+  if (value && typeof value.low === 'number') {
+    return value.low
+  }
+
+  if (typeof dimParam === 'string' && dimParam.trim()) {
+    return dimParam
+  }
+
+  return null
+}
+
+async function loadOnnxProto(): Promise<{ onnx?: { ModelProto: { decode: (input: Uint8Array) => DecodedModel } } }> {
+  const protobufModule = await import('protobufjs/minimal.js')
+  const protobuf = (
+    'default' in protobufModule
+      ? protobufModule.default
+      : protobufModule
+  ) as Record<string, unknown>
   const module = { exports: {} as unknown }
   const exports = module.exports
   const require = (id: string): unknown => {
@@ -111,37 +162,7 @@ function getOnnxProto(): { onnx?: { ModelProto: { decode: (input: Uint8Array) =>
     exports: unknown,
   ) => unknown
 
-  cachedOnnxProto = factory(require, module, exports) as {
+  return factory(require, module, exports) as {
     onnx?: { ModelProto: { decode: (input: Uint8Array) => DecodedModel } }
   }
-
-  return cachedOnnxProto
-}
-
-function toTensorDescriptor(valueInfo: ValueInfo): TensorDescriptor {
-  const dimensions = valueInfo.type?.tensorType?.shape?.dim?.map((item) => {
-    const dimValue = toDimensionNumber(item.dimValue)
-    return typeof dimValue === 'number' && Number.isFinite(dimValue) ? dimValue : null
-  }) ?? []
-
-  return {
-    name: valueInfo.name ?? '',
-    dimensions,
-  }
-}
-
-function toDimensionNumber(value: number | LongLike | null | undefined): number | null {
-  if (typeof value === 'number') {
-    return value
-  }
-
-  if (value && typeof value.toNumber === 'function') {
-    return value.toNumber()
-  }
-
-  if (value && typeof value.low === 'number') {
-    return value.low
-  }
-
-  return null
 }
