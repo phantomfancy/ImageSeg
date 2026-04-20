@@ -1,5 +1,5 @@
 import { startTransition, useCallback, useEffect, useRef, useState } from 'react'
-import type { DetectionRun, ImportedModel } from './lib/onnxRuntime'
+import type { DetectionRun, ImportedModel, RunDetectionOptions } from './lib/onnxRuntime'
 import {
   drawSourceToCanvas,
   getWebGpuSupportState,
@@ -32,6 +32,20 @@ type CameraDeviceOption = {
   label: string
 }
 
+const DEFAULT_DETECTION_THRESHOLD = 0.35
+const DEFAULT_MAX_DETECTIONS = 0
+const FPS_WINDOW_MS = 1000
+const THRESHOLD_COMMIT_KEYS = new Set([
+  'ArrowLeft',
+  'ArrowRight',
+  'ArrowUp',
+  'ArrowDown',
+  'Home',
+  'End',
+  'PageUp',
+  'PageDown',
+])
+
 function App() {
   const [inputMode, setInputMode] = useState<InputMode>('image')
   const [imageFile, setImageFile] = useState<File | null>(null)
@@ -59,6 +73,11 @@ function App() {
   const [configInputKey, setConfigInputKey] = useState(0)
   const [preprocessorInputKey, setPreprocessorInputKey] = useState(0)
   const [detectionItems, setDetectionItems] = useState<DetectionItem[]>([])
+  const [pendingDetectionThreshold, setPendingDetectionThreshold] = useState(DEFAULT_DETECTION_THRESHOLD)
+  const [appliedDetectionThreshold, setAppliedDetectionThreshold] = useState(DEFAULT_DETECTION_THRESHOLD)
+  const [pendingMaxDetectionsInput, setPendingMaxDetectionsInput] = useState(String(DEFAULT_MAX_DETECTIONS))
+  const [appliedMaxDetections, setAppliedMaxDetections] = useState(DEFAULT_MAX_DETECTIONS)
+  const [streamFps, setStreamFps] = useState<number | null>(null)
 
   const sourceVideoRef = useRef<HTMLVideoElement | null>(null)
   const cameraVideoRef = useRef<HTMLVideoElement | null>(null)
@@ -67,6 +86,7 @@ function App() {
   const cameraStreamRef = useRef<MediaStream | null>(null)
   const frameLoopTokenRef = useRef(0)
   const frameInFlightRef = useRef(false)
+  const frameTimestampsRef = useRef<number[]>([])
 
   useEffect(() => () => {
     if (imagePreviewUrl) {
@@ -116,6 +136,10 @@ function App() {
     runtimeMessage ||
     importedModelCompatibilityMessage ||
     (importedModel && !isWebGpuSupported ? (webGpuSupportState.message ?? '') : '')
+  const displayedPendingThreshold = pendingDetectionThreshold.toFixed(2)
+  const displayedAppliedThreshold = appliedDetectionThreshold.toFixed(2)
+  const displayedAppliedMaxDetections = String(appliedMaxDetections)
+  const displayedFps = streamFps === null ? '-' : streamFps.toFixed(1)
   const currentTimeLabel = inputMode === 'camera' && streamState === 'running'
     ? 'Live'
     : currentSourceTime === null
@@ -145,6 +169,12 @@ function App() {
   const canStopCamera =
     inputMode === 'camera' &&
     streamState === 'running'
+  const canAdjustInferenceSettings = Boolean(
+    importedModel &&
+    isImportedModelWebGpuCompatible &&
+    !modelBusy &&
+    streamState !== 'exporting',
+  )
 
   function updateImageFile(nextFile: File | null) {
     stopActiveStream()
@@ -177,6 +207,8 @@ function App() {
     setResultProvider('')
     setRuntimeMessage('')
     setCurrentSourceTime(null)
+    setStreamFps(null)
+    frameTimestampsRef.current = []
 
     if (videoDownloadUrl) {
       URL.revokeObjectURL(videoDownloadUrl)
@@ -186,7 +218,46 @@ function App() {
 
   function clearImportedModelState() {
     setImportedModel(null)
+    resetDetectionThreshold()
+    resetMaxDetections()
     clearRecognitionOutputs()
+  }
+
+  function resetDetectionThreshold(nextValue: number = DEFAULT_DETECTION_THRESHOLD) {
+    const normalizedThreshold = clampDetectionThreshold(nextValue)
+    setPendingDetectionThreshold(normalizedThreshold)
+    setAppliedDetectionThreshold(normalizedThreshold)
+  }
+
+  function commitDetectionThreshold(nextValue: number): number {
+    const normalizedThreshold = clampDetectionThreshold(nextValue)
+    setPendingDetectionThreshold(normalizedThreshold)
+    setAppliedDetectionThreshold((currentValue) =>
+      Math.abs(currentValue - normalizedThreshold) < 0.0001 ? currentValue : normalizedThreshold)
+    return normalizedThreshold
+  }
+
+  function resetMaxDetections(nextValue: number = DEFAULT_MAX_DETECTIONS) {
+    const normalizedMaxDetections = normalizeMaxDetectionsValue(nextValue)
+    setPendingMaxDetectionsInput(String(normalizedMaxDetections))
+    setAppliedMaxDetections(normalizedMaxDetections)
+  }
+
+  function commitMaxDetections(nextValue: number | string): number {
+    const normalizedMaxDetections = normalizeMaxDetectionsValue(nextValue)
+    setPendingMaxDetectionsInput(String(normalizedMaxDetections))
+    setAppliedMaxDetections((currentValue) =>
+      currentValue === normalizedMaxDetections ? currentValue : normalizedMaxDetections)
+    return normalizedMaxDetections
+  }
+
+  function commitInferenceSettings(): RunDetectionOptions {
+    const scoreThresholdOverride = commitDetectionThreshold(pendingDetectionThreshold)
+    const maxDetectionsOverride = commitMaxDetections(pendingMaxDetectionsInput)
+    return {
+      scoreThresholdOverride,
+      maxDetectionsOverride,
+    }
   }
 
   function resetSidecarSelections() {
@@ -217,10 +288,12 @@ function App() {
     startTransition(() => {
       setStreamState('idle')
       setCurrentSourceTime(null)
+      setStreamFps(null)
       if (statusText) {
         setStatusMessage(statusText)
       }
     })
+    frameTimestampsRef.current = []
   }, [])
 
   const refreshCameraDevices = useCallback(async () => {
@@ -254,6 +327,7 @@ function App() {
   }, [stopActiveStream])
 
   async function handleOnnxSelection(file: File | null) {
+    let shouldResetNativeInput = false
     stopActiveStream()
     clearImportedModelState()
     resetSidecarSelections()
@@ -274,6 +348,8 @@ function App() {
       if (nextOnnxModel.family === 'hf-detr-like') {
         startTransition(() => {
           setOnnxModelDraft(nextOnnxModel)
+          resetDetectionThreshold(nextOnnxModel.draftContract.decoder.scoreThreshold)
+          resetMaxDetections()
           setStatusMessage(buildPendingHfMessage(null, null, supportsDirectoryPicker))
         })
         return
@@ -283,18 +359,24 @@ function App() {
       startTransition(() => {
         setOnnxModelDraft(nextOnnxModel)
         setImportedModel(model)
+        resetDetectionThreshold(model.contract.decoder.scoreThreshold)
+        resetMaxDetections()
         clearRecognitionOutputs()
         setStatusMessage(formatModelReadyMessage(model, webGpuSupportState))
       })
     } catch (error) {
+      shouldResetNativeInput = true
       setStatusMessage(`模型解析失败：${formatError(error)}`)
     } finally {
       setModelBusy(false)
-      setOnnxInputKey((value) => value + 1)
+      if (shouldResetNativeInput) {
+        setOnnxInputKey((value) => value + 1)
+      }
     }
   }
 
   async function handleConfigSelection(file: File | null) {
+    let shouldResetNativeInput = false
     if (!file || !onnxModelDraft || onnxModelDraft.family !== 'hf-detr-like') {
       setConfigInputKey((value) => value + 1)
       return
@@ -320,18 +402,24 @@ function App() {
       startTransition(() => {
         setConfigFile(file)
         setImportedModel(model)
+        resetDetectionThreshold(model.contract.decoder.scoreThreshold)
+        resetMaxDetections()
         clearRecognitionOutputs()
         setStatusMessage(formatModelReadyMessage(model, webGpuSupportState))
       })
     } catch (error) {
+      shouldResetNativeInput = true
       setStatusMessage(`config.json 导入失败：${formatError(error)}`)
     } finally {
       setModelBusy(false)
-      setConfigInputKey((value) => value + 1)
+      if (shouldResetNativeInput) {
+        setConfigInputKey((value) => value + 1)
+      }
     }
   }
 
   async function handlePreprocessorSelection(file: File | null) {
+    let shouldResetNativeInput = false
     if (!file || !onnxModelDraft || onnxModelDraft.family !== 'hf-detr-like') {
       setPreprocessorInputKey((value) => value + 1)
       return
@@ -349,9 +437,10 @@ function App() {
       startTransition(() => {
         setPreprocessorConfigFile(file)
         setImportedModel(null)
+        resetDetectionThreshold(onnxModelDraft.draftContract.decoder.scoreThreshold)
+        resetMaxDetections()
         setStatusMessage(buildPendingHfMessage(null, file, supportsDirectoryPicker))
       })
-      setPreprocessorInputKey((value) => value + 1)
       return
     }
 
@@ -367,14 +456,19 @@ function App() {
       startTransition(() => {
         setPreprocessorConfigFile(file)
         setImportedModel(model)
+        resetDetectionThreshold(model.contract.decoder.scoreThreshold)
+        resetMaxDetections()
         clearRecognitionOutputs()
         setStatusMessage(formatModelReadyMessage(model, webGpuSupportState))
       })
     } catch (error) {
+      shouldResetNativeInput = true
       setStatusMessage(`preprocessor_config.json 导入失败：${formatError(error)}`)
     } finally {
       setModelBusy(false)
-      setPreprocessorInputKey((value) => value + 1)
+      if (shouldResetNativeInput) {
+        setPreprocessorInputKey((value) => value + 1)
+      }
     }
   }
 
@@ -430,6 +524,8 @@ function App() {
           setPreprocessorConfigFile(discovered.preprocessorConfigFile)
         }
         setImportedModel(model)
+        resetDetectionThreshold(model.contract.decoder.scoreThreshold)
+        resetMaxDetections()
         clearRecognitionOutputs()
         setStatusMessage(formatAutoDiscoveredMessage(model, discovered, webGpuSupportState))
       })
@@ -459,9 +555,10 @@ function App() {
     setImageDetectBusy(true)
     clearRecognitionOutputs()
     setStatusMessage(`正在使用 ${importedModel.contract.family} 模型执行图片识别...`)
+    const detectionOptions = commitInferenceSettings()
 
     try {
-      const detectionRun = await runSingleImageDetection(importedModel, imageFile)
+      const detectionRun = await runSingleImageDetection(importedModel, imageFile, detectionOptions)
       applyDetectionRun(detectionRun)
       setStatusMessage(
         detectionRun.recognitionResult.detections.length === 0
@@ -504,6 +601,7 @@ function App() {
 
     clearRecognitionOutputs()
     setStatusMessage(`正在启动视频识别：${videoFile.name}。`)
+    const detectionOptions = commitInferenceSettings()
 
     try {
       const videoElement = sourceVideoRef.current
@@ -512,7 +610,7 @@ function App() {
       startTransition(() => {
         setStreamState('running')
       })
-      startVideoLoop(videoElement, 'video')
+      startVideoLoop(videoElement, 'video', detectionOptions)
       setStatusMessage('视频实时识别已启动。')
     } catch (error) {
       setStreamState('idle')
@@ -538,6 +636,7 @@ function App() {
     clearRecognitionOutputs()
     setCameraBusy(true)
     setStatusMessage('正在请求摄像头权限...')
+    const detectionOptions = commitInferenceSettings()
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -560,7 +659,7 @@ function App() {
       startTransition(() => {
         setStreamState('running')
       })
-      startVideoLoop(videoElement, 'camera')
+      startVideoLoop(videoElement, 'camera', detectionOptions)
       setStatusMessage('摄像头实时识别已启动。')
     } catch (error) {
       stopActiveStream()
@@ -588,6 +687,7 @@ function App() {
     clearRecognitionOutputs()
     setStreamState('exporting')
     setStatusMessage(`正在导出结果视频：${videoFile.name}。`)
+    const detectionOptions = commitInferenceSettings()
 
     const exportVideo = document.createElement('video')
     exportVideo.muted = true
@@ -623,7 +723,7 @@ function App() {
 
       recorder.start()
       await exportVideo.play()
-      await processVideoFrames(exportVideo, 'video', exportCanvas)
+      await processVideoFrames(exportVideo, 'video', exportCanvas, detectionOptions)
       if (recorder.state !== 'inactive') {
         recorder.stop()
       }
@@ -645,8 +745,12 @@ function App() {
     }
   }
 
-  function startVideoLoop(videoElement: HTMLVideoElement, sourceKind: 'video' | 'camera') {
-    void processVideoFrames(videoElement, sourceKind)
+  function startVideoLoop(
+    videoElement: HTMLVideoElement,
+    sourceKind: 'video' | 'camera',
+    detectionOptions: RunDetectionOptions,
+  ) {
+    void processVideoFrames(videoElement, sourceKind, undefined, detectionOptions)
       .catch((error) => {
         stopActiveStream(`实时识别失败：${formatError(error)}`)
       })
@@ -656,6 +760,7 @@ function App() {
     videoElement: HTMLVideoElement,
     sourceKind: 'video' | 'camera',
     exportCanvas?: HTMLCanvasElement,
+    detectionOptions?: RunDetectionOptions,
   ): Promise<void> {
     if (!importedModel) {
       return
@@ -695,13 +800,15 @@ function App() {
             importedModel,
             sourceCanvas,
             buildFrameSourceLabel(sourceKind, videoElement.currentTime, videoFile?.name, selectedCameraId, cameraDevices),
+            detectionOptions,
           )
           if (frameLoopTokenRef.current !== token) {
             resolve()
             return
           }
 
-          applyDetectionRun(detectionRun, videoElement.currentTime, exportCanvas)
+          const nextFps = calculateNextFps(frameTimestampsRef.current, performance.now())
+          applyDetectionRun(detectionRun, videoElement.currentTime, exportCanvas, nextFps)
           scheduleNext()
         } catch (error) {
           reject(error)
@@ -734,10 +841,13 @@ function App() {
     detectionRun: DetectionRun,
     timeSeconds: number | null = null,
     exportCanvas?: HTMLCanvasElement,
+    fps: number | null = null,
   ) {
     syncCanvas(detectionRun.annotatedCanvas, resultCanvasRef.current)
+    drawRuntimeOverlay(resultCanvasRef.current, fps)
     if (exportCanvas) {
       syncCanvas(detectionRun.annotatedCanvas, exportCanvas)
+      drawRuntimeOverlay(exportCanvas, fps)
     }
 
     startTransition(() => {
@@ -746,6 +856,7 @@ function App() {
       setRuntimeMessage(detectionRun.runtimeMessage ?? '')
       setCurrentSourceTime(timeSeconds)
       setDetectionItems(toDetectionItems(detectionRun))
+      setStreamFps(fps)
     })
   }
 
@@ -760,262 +871,333 @@ function App() {
       </section>
 
       <section className="grid">
-        <article className="panel panel--input">
-          <header className="panel__header">
-            <h2>输入与导入</h2>
-            <p>选择输入模式后，再导入 ONNX 模型与可选的 Hugging Face 配置文件。</p>
-          </header>
+        <div className="panel-stack">
+          <article className="panel panel--input">
+            <header className="panel__header">
+              <h2>输入与导入</h2>
+              <p>选择输入模式后，再导入 ONNX 模型与可选的 Hugging Face 配置文件。</p>
+            </header>
 
-          <div className="mode-switch">
-            {(['image', 'video', 'camera'] as const).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                className={`mode-switch__button${inputMode === mode ? ' mode-switch__button--active' : ''}`}
-                disabled={streamState !== 'idle'}
-                onClick={() => {
-                  stopActiveStream()
-                  clearRecognitionOutputs()
-                  setInputMode(mode)
-                  if (mode === 'camera') {
-                    void refreshCameraDevices()
-                  }
-                  setStatusMessage(
-                    mode === 'image'
-                      ? '已切换到图片识别模式。'
-                      : mode === 'video'
-                        ? '已切换到本地视频识别模式。'
-                        : '已切换到摄像头识别模式。',
-                  )
-                }}
-              >
-                {mode === 'image' ? '图片' : mode === 'video' ? '视频' : '摄像头'}
-              </button>
-            ))}
-          </div>
-
-          {inputMode === 'image' ? (
-            <label className="field">
-              <span className="field__label">图片文件</span>
-              <input
-                type="file"
-                accept="image/*"
-                disabled={streamState !== 'idle'}
-                onChange={(event) => {
-                  updateImageFile(event.target.files?.[0] ?? null)
-                }}
-              />
-              <span className="field__hint">{imageFile?.name ?? '未选择图片。'}</span>
-            </label>
-          ) : null}
-
-          {inputMode === 'video' ? (
-            <label className="field">
-              <span className="field__label">视频文件</span>
-              <input
-                type="file"
-                accept="video/*"
-                disabled={streamState !== 'idle'}
-                onChange={(event) => {
-                  updateVideoFile(event.target.files?.[0] ?? null)
-                }}
-              />
-              <span className="field__hint">{videoFile?.name ?? '未选择视频。'}</span>
-            </label>
-          ) : null}
-
-          {inputMode === 'camera' ? (
-            <label className="field">
-              <span className="field__label">摄像头设备</span>
-              <select
-                className="field__select"
-                value={selectedCameraId}
-                disabled={cameraBusy || streamState !== 'idle' || cameraDevices.length === 0}
-                onChange={(event) => {
-                  setSelectedCameraId(event.target.value)
-                }}
-              >
-                {cameraDevices.length === 0 ? (
-                  <option value="">未发现可用摄像头</option>
-                ) : (
-                  cameraDevices.map((item) => (
-                    <option key={item.deviceId} value={item.deviceId}>
-                      {item.label}
-                    </option>
-                  ))
-                )}
-              </select>
-              <span className="field__hint">
-                {supportsCamera
-                  ? (cameraDevices.length === 0 ? '首次授权前可能无法显示设备标签。' : '选择需要用于实时识别的摄像头。')
-                  : '当前浏览器不支持摄像头访问。'}
-              </span>
-            </label>
-          ) : null}
-
-          <label className="field">
-            <span className="field__label">ONNX 模型</span>
-            <input
-              key={onnxInputKey}
-              type="file"
-              accept=".onnx"
-              disabled={modelBusy || streamState !== 'idle'}
-              onChange={(event) => {
-                void handleOnnxSelection(event.target.files?.[0] ?? null)
-              }}
-            />
-            <span className="field__hint">
-              {onnxModelDraft?.fileName ?? '仅允许导入 .onnx 文件。'}
-            </span>
-          </label>
-
-          <label className="field">
-            <span className="field__label">{CONFIG_FILE_NAME} {importControls.configRequired ? '(必选)' : '(未启用)'}</span>
-            <input
-              key={configInputKey}
-              type="file"
-              accept=".json,application/json"
-              disabled={!importControls.configEnabled || modelBusy || streamState !== 'idle'}
-              onChange={(event) => {
-                void handleConfigSelection(event.target.files?.[0] ?? null)
-              }}
-            />
-            <span className="field__hint">
-              {configFile?.name ?? (
-                importControls.configEnabled
-                  ? `仅允许导入 ${CONFIG_FILE_NAME}。`
-                  : '请先导入 ONNX，并识别为 Hugging Face 风格模型。'
-              )}
-            </span>
-          </label>
-
-          <label className="field">
-            <span className="field__label">{PREPROCESSOR_CONFIG_FILE_NAME} {importControls.preprocessorEnabled ? '(可选)' : '(未启用)'}</span>
-            <input
-              key={preprocessorInputKey}
-              type="file"
-              accept=".json,application/json"
-              disabled={!importControls.preprocessorEnabled || modelBusy || streamState !== 'idle'}
-              onChange={(event) => {
-                void handlePreprocessorSelection(event.target.files?.[0] ?? null)
-              }}
-            />
-            <span className="field__hint">
-              {preprocessorConfigFile?.name ?? (
-                importControls.preprocessorEnabled
-                  ? `仅允许导入 ${PREPROCESSOR_CONFIG_FILE_NAME}。`
-                  : '当前模型不需要该配置文件。'
-              )}
-            </span>
-          </label>
-
-          {onnxModelDraft?.family === 'hf-detr-like' ? (
-            <div className="actions actions--stacked">
-              <button
-                type="button"
-                className="action action--secondary"
-                disabled={!importControls.autoDiscoverEnabled || modelBusy || discoverBusy || streamState !== 'idle'}
-                onClick={() => void handleAutoDiscoverSidecars()}
-              >
-                {discoverBusy ? '查找中...' : '自动查找同目录配置'}
-              </button>
-              {!supportsDirectoryPicker ? (
-                <span className="field__hint">当前浏览器不支持目录授权，请手动导入 JSON 配置文件。</span>
-              ) : null}
+            <div className="mode-switch">
+              {(['image', 'video', 'camera'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={`mode-switch__button${inputMode === mode ? ' mode-switch__button--active' : ''}`}
+                  disabled={streamState !== 'idle'}
+                  onClick={() => {
+                    stopActiveStream()
+                    clearRecognitionOutputs()
+                    setInputMode(mode)
+                    if (mode === 'camera') {
+                      void refreshCameraDevices()
+                    }
+                    setStatusMessage(
+                      mode === 'image'
+                        ? '已切换到图片识别模式。'
+                        : mode === 'video'
+                          ? '已切换到本地视频识别模式。'
+                          : '已切换到摄像头识别模式。',
+                    )
+                  }}
+                >
+                  {mode === 'image' ? '图片' : mode === 'video' ? '视频' : '摄像头'}
+                </button>
+              ))}
             </div>
-          ) : null}
 
-          <div className="actions actions--stacked">
             {inputMode === 'image' ? (
-              <>
-                <button
-                  type="button"
-                  className="action action--primary"
-                  disabled={!canRunImage}
-                  onClick={() => void handleRunImageDetection()}
-                >
-                  {imageDetectBusy ? '识别中...' : '执行图片识别'}
-                </button>
-                <button
-                  type="button"
-                  className="action action--secondary"
-                  disabled={!canExportImage}
-                  onClick={() => void handleExportImage()}
-                >
-                  导出结果图像
-                </button>
-              </>
+              <label className="field">
+                <span className="field__label">图片文件</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  disabled={streamState !== 'idle'}
+                  onChange={(event) => {
+                    updateImageFile(event.target.files?.[0] ?? null)
+                  }}
+                />
+                <span className="field__hint">{imageFile?.name ?? '未选择图片。'}</span>
+              </label>
             ) : null}
 
             {inputMode === 'video' ? (
-              <>
-                <button
-                  type="button"
-                  className="action action--primary"
-                  disabled={!canStartVideo}
-                  onClick={() => void handleStartVideoDetection()}
-                >
-                  开始实时识别
-                </button>
-                <button
-                  type="button"
-                  className="action action--secondary"
-                  disabled={!canStopVideo}
-                  onClick={() => stopActiveStream('已停止视频实时识别。')}
-                >
-                  停止实时识别
-                </button>
-                <button
-                  type="button"
-                  className="action action--secondary"
-                  disabled={!canExportVideo}
-                  onClick={() => void handleExportVideo()}
-                >
-                  {streamState === 'exporting' ? '导出中...' : '导出结果视频'}
-                </button>
-                {videoDownloadUrl ? (
-                  <a
-                    className="download-link"
-                    href={videoDownloadUrl}
-                    download={buildVideoExportFileName(videoFile?.name ?? 'result')}
-                  >
-                    下载结果 WebM
-                  </a>
-                ) : null}
-                {!supportsVideoExport ? (
-                  <span className="field__hint">当前浏览器不支持 `MediaRecorder WebM` 导出。</span>
-                ) : null}
-              </>
+              <label className="field">
+                <span className="field__label">视频文件</span>
+                <input
+                  type="file"
+                  accept="video/*"
+                  disabled={streamState !== 'idle'}
+                  onChange={(event) => {
+                    updateVideoFile(event.target.files?.[0] ?? null)
+                  }}
+                />
+                <span className="field__hint">{videoFile?.name ?? '未选择视频。'}</span>
+              </label>
             ) : null}
 
             {inputMode === 'camera' ? (
-              <>
-                <button
-                  type="button"
-                  className="action action--primary"
-                  disabled={!canStartCamera}
-                  onClick={() => void handleStartCameraDetection()}
+              <label className="field">
+                <span className="field__label">摄像头设备</span>
+                <select
+                  className="field__select"
+                  value={selectedCameraId}
+                  disabled={cameraBusy || streamState !== 'idle' || cameraDevices.length === 0}
+                  onChange={(event) => {
+                    setSelectedCameraId(event.target.value)
+                  }}
                 >
-                  {cameraBusy ? '启动中...' : '开始实时识别'}
-                </button>
+                  {cameraDevices.length === 0 ? (
+                    <option value="">未发现可用摄像头</option>
+                  ) : (
+                    cameraDevices.map((item) => (
+                      <option key={item.deviceId} value={item.deviceId}>
+                        {item.label}
+                      </option>
+                    ))
+                  )}
+                </select>
+                <span className="field__hint">
+                  {supportsCamera
+                    ? (cameraDevices.length === 0 ? '首次授权前可能无法显示设备标签。' : '选择需要用于实时识别的摄像头。')
+                    : '当前浏览器不支持摄像头访问。'}
+                </span>
+              </label>
+            ) : null}
+
+            <label className="field">
+              <span className="field__label">ONNX 模型</span>
+              <input
+                key={onnxInputKey}
+                type="file"
+                accept=".onnx"
+                disabled={modelBusy || streamState !== 'idle'}
+                onChange={(event) => {
+                  void handleOnnxSelection(event.target.files?.[0] ?? null)
+                }}
+              />
+              <span className="field__hint">
+                {onnxModelDraft?.fileName ?? '仅允许导入 .onnx 文件。'}
+              </span>
+            </label>
+
+            <label className="field">
+              <span className="field__label">{CONFIG_FILE_NAME} {importControls.configRequired ? '(必选)' : '(未启用)'}</span>
+              <input
+                key={configInputKey}
+                type="file"
+                accept=".json,application/json"
+                disabled={!importControls.configEnabled || modelBusy || streamState !== 'idle'}
+                onChange={(event) => {
+                  void handleConfigSelection(event.target.files?.[0] ?? null)
+                }}
+              />
+              <span className="field__hint">
+                {configFile?.name ?? (
+                  importControls.configEnabled
+                    ? `仅允许导入 ${CONFIG_FILE_NAME}。`
+                    : '请先导入 ONNX，并识别为 Hugging Face 风格模型。'
+                )}
+              </span>
+            </label>
+
+            <label className="field">
+              <span className="field__label">{PREPROCESSOR_CONFIG_FILE_NAME} {importControls.preprocessorEnabled ? '(可选)' : '(未启用)'}</span>
+              <input
+                key={preprocessorInputKey}
+                type="file"
+                accept=".json,application/json"
+                disabled={!importControls.preprocessorEnabled || modelBusy || streamState !== 'idle'}
+                onChange={(event) => {
+                  void handlePreprocessorSelection(event.target.files?.[0] ?? null)
+                }}
+              />
+              <span className="field__hint">
+                {preprocessorConfigFile?.name ?? (
+                  importControls.preprocessorEnabled
+                    ? `仅允许导入 ${PREPROCESSOR_CONFIG_FILE_NAME}。`
+                    : '当前模型不需要该配置文件。'
+                )}
+              </span>
+            </label>
+
+            {onnxModelDraft?.family === 'hf-detr-like' ? (
+              <div className="actions actions--stacked">
                 <button
                   type="button"
                   className="action action--secondary"
-                  disabled={!canStopCamera}
-                  onClick={() => stopActiveStream('已停止摄像头实时识别。')}
+                  disabled={!importControls.autoDiscoverEnabled || modelBusy || discoverBusy || streamState !== 'idle'}
+                  onClick={() => void handleAutoDiscoverSidecars()}
                 >
-                  停止实时识别
+                  {discoverBusy ? '查找中...' : '自动查找同目录配置'}
                 </button>
-              </>
+                {!supportsDirectoryPicker ? (
+                  <span className="field__hint">当前浏览器不支持目录授权，请手动导入 JSON 配置文件。</span>
+                ) : null}
+              </div>
             ) : null}
-          </div>
 
-          <div className="status-box">
-            <div className="status-box__title">状态</div>
-            <p>{statusMessage}</p>
-            {displayedRuntimeMessage ? <p>{displayedRuntimeMessage}</p> : null}
-          </div>
-        </article>
+            <div className="status-box">
+              <div className="status-box__title">状态</div>
+              <p>{statusMessage}</p>
+              {displayedRuntimeMessage ? <p>{displayedRuntimeMessage}</p> : null}
+            </div>
+          </article>
+
+          <article className="panel panel--settings">
+            <header className="panel__header">
+              <h2>推理设置</h2>
+              <p>在启动识别前统一设置阈值、识别数量和导出相关操作。</p>
+            </header>
+
+            <label className="field">
+              <span className="field__label">推理阈值</span>
+              <div className="threshold-control">
+                <input
+                  className="threshold-control__slider"
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={pendingDetectionThreshold}
+                  disabled={!canAdjustInferenceSettings}
+                  onChange={(event) => {
+                    setPendingDetectionThreshold(clampDetectionThreshold(Number(event.target.value)))
+                  }}
+                  onPointerUp={(event) => {
+                    commitDetectionThreshold(Number(event.currentTarget.value))
+                  }}
+                  onKeyUp={(event) => {
+                    if (THRESHOLD_COMMIT_KEYS.has(event.key)) {
+                      commitDetectionThreshold(Number(event.currentTarget.value))
+                    }
+                  }}
+                  onBlur={(event) => {
+                    commitDetectionThreshold(Number(event.currentTarget.value))
+                  }}
+                />
+                <span className="threshold-control__value">{displayedPendingThreshold}</span>
+              </div>
+              <span className="field__hint">
+                {importedModel
+                  ? `当前值 ${displayedPendingThreshold}，已生效 ${displayedAppliedThreshold}。拖动过程中不会立即重跑推理，松开后新阈值才会生效。`
+                  : '导入模型后可调整推理阈值。'}
+              </span>
+            </label>
+
+            <label className="field">
+              <span className="field__label">识别数量</span>
+              <div className="count-control">
+                <input
+                  className="count-control__input"
+                  type="number"
+                  min="0"
+                  step="1"
+                  inputMode="numeric"
+                  value={pendingMaxDetectionsInput}
+                  disabled={!canAdjustInferenceSettings}
+                  onChange={(event) => {
+                    setPendingMaxDetectionsInput(event.target.value)
+                  }}
+                  onBlur={(event) => {
+                    commitMaxDetections(event.currentTarget.value)
+                  }}
+                />
+                <span className="count-control__value">{displayedAppliedMaxDetections}</span>
+              </div>
+              <span className="field__hint">
+                {importedModel
+                  ? `输入 0 代表全部识别并绘制；当前输入 ${pendingMaxDetectionsInput || '0'}，已生效 ${displayedAppliedMaxDetections}。失焦或开始推理时才会提交新值。`
+                  : '导入模型后可设置识别数量上限，0 代表全部识别并绘制。'}
+              </span>
+            </label>
+
+            <div className="actions actions--stacked">
+              {inputMode === 'image' ? (
+                <>
+                  <button
+                    type="button"
+                    className="action action--primary"
+                    disabled={!canRunImage}
+                    onClick={() => void handleRunImageDetection()}
+                  >
+                    {imageDetectBusy ? '识别中...' : '执行图片识别'}
+                  </button>
+                  <button
+                    type="button"
+                    className="action action--secondary"
+                    disabled={!canExportImage}
+                    onClick={() => void handleExportImage()}
+                  >
+                    导出结果图像
+                  </button>
+                </>
+              ) : null}
+
+              {inputMode === 'video' ? (
+                <>
+                  <button
+                    type="button"
+                    className="action action--primary"
+                    disabled={!canStartVideo}
+                    onClick={() => void handleStartVideoDetection()}
+                  >
+                    开始实时识别
+                  </button>
+                  <button
+                    type="button"
+                    className="action action--secondary"
+                    disabled={!canStopVideo}
+                    onClick={() => stopActiveStream('已停止视频实时识别。')}
+                  >
+                    停止实时识别
+                  </button>
+                  <button
+                    type="button"
+                    className="action action--secondary"
+                    disabled={!canExportVideo}
+                    onClick={() => void handleExportVideo()}
+                  >
+                    {streamState === 'exporting' ? '导出中...' : '导出结果视频'}
+                  </button>
+                  {videoDownloadUrl ? (
+                    <a
+                      className="download-link"
+                      href={videoDownloadUrl}
+                      download={buildVideoExportFileName(videoFile?.name ?? 'result')}
+                    >
+                      下载结果 WebM
+                    </a>
+                  ) : null}
+                  {!supportsVideoExport ? (
+                    <span className="field__hint">当前浏览器不支持 `MediaRecorder WebM` 导出。</span>
+                  ) : null}
+                </>
+              ) : null}
+
+              {inputMode === 'camera' ? (
+                <>
+                  <button
+                    type="button"
+                    className="action action--primary"
+                    disabled={!canStartCamera}
+                    onClick={() => void handleStartCameraDetection()}
+                  >
+                    {cameraBusy ? '启动中...' : '开始实时识别'}
+                  </button>
+                  <button
+                    type="button"
+                    className="action action--secondary"
+                    disabled={!canStopCamera}
+                    onClick={() => stopActiveStream('已停止摄像头实时识别。')}
+                  >
+                    停止实时识别
+                  </button>
+                </>
+              ) : null}
+            </div>
+          </article>
+        </div>
 
         <article className="panel panel--contract">
           <header className="panel__header">
@@ -1068,62 +1250,57 @@ function App() {
       <section className="grid grid--results">
         <article className="panel panel--preview">
           <header className="panel__header">
-            <h2>输入预览与结果叠加</h2>
-            <p>左侧显示当前输入来源，右侧显示识别结果叠加画面。</p>
+            <h2>统一预览</h2>
+            <p>识别前显示输入源，识别后在同一区域显示结果叠加画面。</p>
           </header>
 
-          <div className="preview-grid">
-            <div className="preview-card">
-              <div className="preview-card__title">输入源</div>
+          <div className="preview-card preview-stage">
+            <div className="preview-card__title">当前画面</div>
+            <div className="preview-stage__media">
               {inputMode === 'image' ? (
                 imagePreviewUrl ? (
-                  <img className="preview-card__image" src={imagePreviewUrl} alt="输入图片" />
+                  <img
+                    className={`preview-stage__image${hasRenderedResult ? ' preview-stage__visual--hidden' : ''}`}
+                    src={imagePreviewUrl}
+                    alt="输入图片"
+                  />
                 ) : (
                   <EmptyState text="未选择图片。" />
                 )
-              ) : inputMode === 'video' ? (
-                <div className="preview-card__media">
+              ) : null}
+
+              {inputMode === 'video' ? (
+                videoPreviewUrl ? (
                   <video
                     ref={sourceVideoRef}
-                    className={`preview-card__video${videoPreviewUrl ? '' : ' preview-card__video--hidden'}`}
+                    className={`preview-stage__video${hasRenderedResult ? ' preview-stage__visual--hidden' : ''}`}
                     src={videoPreviewUrl}
                     controls
                     playsInline
                     muted
                   />
-                  {!videoPreviewUrl ? <EmptyState text="未选择视频。" /> : null}
-                </div>
-              ) : (
-                <div className="preview-card__media">
+                ) : (
+                  <EmptyState text="未选择视频。" />
+                )
+              ) : null}
+
+              {inputMode === 'camera' ? (
+                <>
                   <video
                     ref={cameraVideoRef}
-                    className="preview-card__video"
+                    className={`preview-stage__video${streamState === 'running' && !hasRenderedResult ? '' : ' preview-stage__visual--hidden'}`}
                     autoPlay
                     muted
                     playsInline
                   />
                   {streamState !== 'running' ? <EmptyState text="尚未启动摄像头。" /> : null}
-                </div>
-              )}
-            </div>
+                </>
+              ) : null}
 
-            <div className="preview-card preview-card--canvas">
-              <div className="preview-card__title">结果叠加图</div>
               <canvas
                 ref={resultCanvasRef}
-                className={`preview-card__canvas${hasRenderedResult ? '' : ' preview-card__canvas--hidden'}`}
+                className={`preview-stage__canvas${hasRenderedResult ? '' : ' preview-stage__visual--hidden'}`}
               />
-              {!hasRenderedResult ? (
-                <EmptyState
-                  text={
-                    inputMode === 'image'
-                      ? '尚未执行图片识别。'
-                      : inputMode === 'video'
-                        ? (streamState === 'exporting' ? '正在导出结果视频...' : '尚未启动视频实时识别。')
-                        : '尚未启动摄像头实时识别。'
-                  }
-                />
-              ) : null}
             </div>
           </div>
         </article>
@@ -1139,6 +1316,7 @@ function App() {
             <Metric label="Source Mode" value={inputMode} />
             <Metric label="Detection Count" value={String(detectionItems.length)} />
             <Metric label="Current Time" value={currentTimeLabel} />
+            <Metric label="FPS" value={displayedFps} />
           </div>
 
           {detectionItems.length === 0 ? (
@@ -1314,6 +1492,69 @@ function syncCanvas(source: HTMLCanvasElement, target: HTMLCanvasElement | null)
   }
 
   context.drawImage(source, 0, 0)
+}
+
+function drawRuntimeOverlay(canvas: HTMLCanvasElement | null, fps: number | null) {
+  if (!canvas || fps === null) {
+    return
+  }
+
+  const context = canvas.getContext('2d')
+  if (!context) {
+    return
+  }
+
+  const label = `FPS ${fps.toFixed(1)}`
+  context.save()
+  context.font = "15px 'Cascadia Code', 'Consolas', monospace"
+  context.textBaseline = 'top'
+  const metrics = context.measureText(label)
+  const textWidth = metrics.width + 16
+  const textHeight = 28
+
+  context.fillStyle = 'rgba(20, 32, 42, 0.78)'
+  context.fillRect(14, 14, textWidth, textHeight)
+  context.fillStyle = '#f8f5ed'
+  context.fillText(label, 22, 20)
+  context.restore()
+}
+
+function calculateNextFps(frameTimestamps: number[], timestamp: number): number {
+  frameTimestamps.push(timestamp)
+  while (frameTimestamps.length > 0 && timestamp - frameTimestamps[0] > FPS_WINDOW_MS) {
+    frameTimestamps.shift()
+  }
+
+  if (frameTimestamps.length <= 1) {
+    return 0
+  }
+
+  const elapsedMs = frameTimestamps[frameTimestamps.length - 1] - frameTimestamps[0]
+  if (elapsedMs <= 0) {
+    return 0
+  }
+
+  return Number((((frameTimestamps.length - 1) * 1000) / elapsedMs).toFixed(1))
+}
+
+function clampDetectionThreshold(value: number): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_DETECTION_THRESHOLD
+  }
+
+  return Math.min(Math.max(value, 0), 1)
+}
+
+function normalizeMaxDetectionsValue(value: number | string): number {
+  const parsedValue = typeof value === 'string'
+    ? Number(value.trim())
+    : value
+
+  if (!Number.isFinite(parsedValue)) {
+    return DEFAULT_MAX_DETECTIONS
+  }
+
+  return Math.max(0, Math.trunc(parsedValue))
 }
 
 async function ensureVideoReady(videoElement: HTMLVideoElement): Promise<void> {

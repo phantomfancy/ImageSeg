@@ -56,6 +56,11 @@ export interface DetectionRun {
   runtimeMessage?: string
 }
 
+export interface RunDetectionOptions {
+  scoreThresholdOverride?: number
+  maxDetectionsOverride?: number
+}
+
 type PreparedInput = {
   tensor: ort.Tensor
   geometry: PreprocessedImageGeometry
@@ -96,25 +101,28 @@ export async function inspectImportedModel(options: FinalizeModelImportOptions):
 export async function runSingleImageDetection(
   model: ImportedModel,
   imageFile: File,
+  options?: RunDetectionOptions,
 ): Promise<DetectionRun> {
   const sourceCanvas = await loadImageCanvas(imageFile)
-  return runDetectionOnCanvas(model, sourceCanvas, imageFile.name)
+  return runDetectionOnCanvas(model, sourceCanvas, imageFile.name, options)
 }
 
 export async function runDetectionOnCanvas(
   model: ImportedModel,
   sourceCanvas: HTMLCanvasElement,
   inputSource: string,
+  options?: RunDetectionOptions,
 ): Promise<DetectionRun> {
   assertModelWebGpuCompatible(model)
   const sessionState = await getSessionState(model.key, model.bytes)
-  const preparedInput = createPreparedInput(sourceCanvas, model.contract)
+  const detectionContract = createDetectionContract(model.contract, options)
+  const preparedInput = createPreparedInput(sourceCanvas, detectionContract)
   const outputMap = await sessionState.session.run({
-    [model.contract.preprocess.inputTensorName]: preparedInput.tensor,
+    [detectionContract.preprocess.inputTensorName]: preparedInput.tensor,
   })
   const normalizedOutputs = await normalizeOutputs(outputMap)
   const detections = decodeDetections(
-    model.contract,
+    detectionContract,
     normalizedOutputs,
     preparedInput.geometry,
   )
@@ -129,7 +137,7 @@ export async function runDetectionOnCanvas(
       detections,
     },
     runtimeMessage: detections.length === 0
-      ? buildNoDetectionsRuntimeMessage(model.contract, normalizedOutputs)
+      ? buildNoDetectionsRuntimeMessage(detectionContract, normalizedOutputs)
       : undefined,
   }
 }
@@ -418,6 +426,31 @@ function assertModelWebGpuCompatible(model: ImportedModel) {
   throw new Error(issueMessage || '当前模型不兼容 WebGPU，无法执行识别。')
 }
 
+function createDetectionContract(
+  contract: ResolvedModelContract,
+  options?: RunDetectionOptions,
+): ResolvedModelContract {
+  const hasScoreThresholdOverride = Number.isFinite(options?.scoreThresholdOverride)
+  const hasMaxDetectionsOverride = Number.isFinite(options?.maxDetectionsOverride)
+
+  if (!hasScoreThresholdOverride && !hasMaxDetectionsOverride) {
+    return contract
+  }
+
+  return {
+    ...contract,
+    decoder: {
+      ...contract.decoder,
+      scoreThreshold: hasScoreThresholdOverride
+        ? clampScoreThreshold(options!.scoreThresholdOverride!)
+        : contract.decoder.scoreThreshold,
+      maxDetections: hasMaxDetectionsOverride
+        ? clampMaxDetections(options!.maxDetectionsOverride!)
+        : contract.decoder.maxDetections,
+    },
+  }
+}
+
 function buildNoDetectionsRuntimeMessage(
   contract: ResolvedModelContract,
   outputs: Record<string, TensorLike>,
@@ -428,6 +461,18 @@ function buildNoDetectionsRuntimeMessage(
   }
 
   return `推理已执行完成，当前最高候选分数 ${(highestScore * 100).toFixed(1)}%，低于阈值 ${(contract.decoder.scoreThreshold * 100).toFixed(1)}%。`
+}
+
+function clampScoreThreshold(value: number): number {
+  return Math.min(Math.max(value, 0), 1)
+}
+
+function clampMaxDetections(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0
+  }
+
+  return Math.max(0, Math.trunc(value))
 }
 
 function estimateHighestCandidateScore(

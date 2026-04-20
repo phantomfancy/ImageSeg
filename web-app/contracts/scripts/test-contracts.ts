@@ -118,6 +118,79 @@ const detections = decodeDetections(
 assert.equal(detections.length, 2)
 assert.ok(detections[0].confidence >= detections[1].confidence)
 
+const unlimitedDetections = decodeDetections(
+  resolveModelContract({
+    inputs: toTensorDescriptors([
+      { name: 'images', shape: [1, 3, 640, 640] },
+    ]),
+    outputs: toTensorDescriptors([
+      { name: 'output0', shape: [1, 6, 2] },
+    ]),
+    manifest: {
+      ...ultralyticsYoloContract,
+      family: 'ultralytics-yolo-detect',
+      schemaVersion: '2026-04-19',
+      decoder: {
+        ...ultralyticsYoloContract.decoder,
+        maxDetections: 0,
+      },
+    },
+  }),
+  { output0 },
+  {
+    sourceWidth: 640,
+    sourceHeight: 640,
+    targetWidth: 640,
+    targetHeight: 640,
+    resizeMode: 'stretch',
+    scaleX: 1,
+    scaleY: 1,
+    padLeft: 0,
+    padTop: 0,
+    contentWidth: 640,
+    contentHeight: 640,
+  },
+)
+
+assert.equal(unlimitedDetections.length, 2)
+
+const limitedDetections = decodeDetections(
+  resolveModelContract({
+    inputs: toTensorDescriptors([
+      { name: 'images', shape: [1, 3, 640, 640] },
+    ]),
+    outputs: toTensorDescriptors([
+      { name: 'output0', shape: [1, 6, 2] },
+    ]),
+    manifest: {
+      ...ultralyticsYoloContract,
+      family: 'ultralytics-yolo-detect',
+      schemaVersion: '2026-04-19',
+      decoder: {
+        ...ultralyticsYoloContract.decoder,
+        maxDetections: 1,
+      },
+    },
+  }),
+  { output0 },
+  {
+    sourceWidth: 640,
+    sourceHeight: 640,
+    targetWidth: 640,
+    targetHeight: 640,
+    resizeMode: 'stretch',
+    scaleX: 1,
+    scaleY: 1,
+    padLeft: 0,
+    padTop: 0,
+    contentWidth: 640,
+    contentHeight: 640,
+  },
+)
+
+assert.equal(limitedDetections.length, 1)
+assert.equal(limitedDetections[0].confidence, detections[0].confidence)
+
 const yoloWithOverlap: TensorLike = {
   dims: [1, 6, 3],
   data: new Float32Array([
@@ -150,6 +223,43 @@ const nmsDetections = decodeDetections(
 
 assert.equal(nmsDetections.length, 2)
 assert.ok(nmsDetections[0].confidence > nmsDetections[1].confidence)
+
+const nmsLimitedDetections = decodeDetections(
+  resolveModelContract({
+    inputs: toTensorDescriptors([
+      { name: 'images', shape: [1, 3, 640, 640] },
+    ]),
+    outputs: toTensorDescriptors([
+      { name: 'output0', shape: [1, 6, 3] },
+    ]),
+    manifest: {
+      ...ultralyticsYoloContract,
+      family: 'ultralytics-yolo-detect',
+      schemaVersion: '2026-04-19',
+      decoder: {
+        ...ultralyticsYoloContract.decoder,
+        maxDetections: 1,
+      },
+    },
+  }),
+  { output0: yoloWithOverlap },
+  {
+    sourceWidth: 640,
+    sourceHeight: 640,
+    targetWidth: 640,
+    targetHeight: 640,
+    resizeMode: 'stretch',
+    scaleX: 1,
+    scaleY: 1,
+    padLeft: 0,
+    padTop: 0,
+    contentWidth: 640,
+    contentHeight: 640,
+  },
+)
+
+assert.equal(nmsLimitedDetections.length, 1)
+assert.equal(nmsLimitedDetections[0].confidence, nmsDetections[0].confidence)
 
 const stretchDetections = decodeDetections(
   hfContract,

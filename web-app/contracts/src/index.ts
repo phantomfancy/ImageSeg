@@ -657,9 +657,26 @@ function finalizeDetections(
 ): Detection[] {
   const sorted = [...detections]
     .sort((left, right) => right.confidence - left.confidence)
+  const normalizedMaxDetections = Math.trunc(maxDetections)
+
+  if (normalizedMaxDetections <= 0) {
+    if (typeof nmsIouThreshold !== 'number' || nmsIouThreshold <= 0 || sorted.length <= 1) {
+      return sorted
+    }
+
+    const selected: Detection[] = []
+    for (const detection of sorted) {
+      const overlapsExisting = selected.some((item) => calculateIoU(item.box, detection.box) >= nmsIouThreshold)
+      if (!overlapsExisting) {
+        selected.push(detection)
+      }
+    }
+
+    return selected
+  }
 
   if (typeof nmsIouThreshold !== 'number' || nmsIouThreshold <= 0 || sorted.length <= 1) {
-    return sorted.slice(0, maxDetections)
+    return sorted.slice(0, normalizedMaxDetections)
   }
 
   const selected: Detection[] = []
@@ -669,7 +686,7 @@ function finalizeDetections(
       selected.push(detection)
     }
 
-    if (selected.length >= maxDetections) {
+    if (selected.length >= normalizedMaxDetections) {
       break
     }
   }
