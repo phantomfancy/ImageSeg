@@ -13,6 +13,7 @@ const cases = [
     onnx: 'yolov8n__himars_style_ultralytics.onnx',
     expected: {
       family: 'ultralytics-yolo-detect',
+      webGpuSupported: true,
       labels: { 0: 'himars' },
       labelSource: 'embedded-metadata',
       inputs: [{ name: 'images', dimensions: [1, 3, 640, 640] }],
@@ -23,6 +24,7 @@ const cases = [
     onnx: 'rtdetrv2_equipments_style_ultralytics.onnx',
     expected: {
       family: 'ultralytics-rtdetr',
+      webGpuSupported: true,
       labels: { 0: 'Aircraft', 1: 'heavy armour', 2: 'light armour', 3: 'uav' },
       labelSource: 'embedded-metadata',
       inputs: [{ name: 'images', dimensions: [1, 3, 640, 640] }],
@@ -35,6 +37,8 @@ const cases = [
     preprocessor: 'rtdetrv2_himars_style_hugginface/preprocessor_config.json',
     expected: {
       family: 'hf-detr-like',
+      webGpuSupported: false,
+      webGpuIssueCode: 'webgpu-cast-int64-unsupported',
       labels: { 0: 'himars' },
       labelSource: 'sidecar-manifest',
       inputs: [{ name: 'pixel_values', dimensions: ['batch_size', 3, 'height', 'width'] }],
@@ -50,6 +54,8 @@ const cases = [
     preprocessor: 'rtdetrv2_original_style_hugginface/preprocessor_config.json',
     expected: {
       family: 'hf-detr-like',
+      webGpuSupported: false,
+      webGpuIssueCode: 'webgpu-cast-int64-unsupported',
       labels: { 0: 'person', 79: 'toothbrush' },
       labelSource: 'sidecar-manifest',
       inputs: [{ name: 'pixel_values', dimensions: ['batch_size', 3, 'height', 'width'] }],
@@ -82,6 +88,15 @@ for (const item of cases) {
 
   assert.equal(model.contract.family, item.expected.family)
   assert.equal(model.contract.labelSource, item.expected.labelSource)
+  assert.equal(onnxModel.webGpuCompatibility.supported, item.expected.webGpuSupported)
+  assert.equal(model.webGpuCompatibility.supported, item.expected.webGpuSupported)
+
+  if (item.expected.webGpuIssueCode) {
+    assert.equal(
+      onnxModel.webGpuCompatibility.issues.some((issue) => issue.code === item.expected.webGpuIssueCode),
+      true,
+    )
+  }
 
   for (const [labelId, label] of Object.entries(item.expected.labels)) {
     assert.equal(model.contract.labels[Number(labelId)], label)
@@ -90,7 +105,7 @@ for (const item of cases) {
   assert.deepEqual(model.contract.inputs, item.expected.inputs)
   assert.deepEqual(model.contract.outputs, item.expected.outputs)
 
-  console.log(`${item.onnx} -> ${model.contract.family}`)
+  console.log(`${item.onnx} -> ${model.contract.family} (webgpu=${model.webGpuCompatibility.supported ? 'ok' : 'blocked'})`)
 }
 
 console.log(`verified ${cases.length} training_result model(s)`)

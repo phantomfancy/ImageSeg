@@ -21,6 +21,8 @@ const hfContract = resolveModelContract({
 })
 
 assert.equal(hfContract.family, 'hf-detr-like')
+assert.deepEqual(hfContract.runtimeHints.preferredExecutionProviders, ['webgpu'])
+assert.equal(hfContract.decoder.nmsIouThreshold, null)
 
 const ultralyticsYoloContract = resolveModelContract({
   inputs: toTensorDescriptors([
@@ -33,6 +35,8 @@ const ultralyticsYoloContract = resolveModelContract({
 })
 
 assert.equal(ultralyticsYoloContract.family, 'ultralytics-yolo-detect')
+assert.equal(ultralyticsYoloContract.decoder.scoreThreshold, 0.08)
+assert.equal(ultralyticsYoloContract.decoder.nmsIouThreshold, 0.45)
 
 const ultralyticsRtDetrContract = resolveModelContract({
   inputs: toTensorDescriptors([
@@ -45,6 +49,7 @@ const ultralyticsRtDetrContract = resolveModelContract({
 })
 
 assert.equal(ultralyticsRtDetrContract.family, 'ultralytics-rtdetr')
+assert.equal(ultralyticsRtDetrContract.decoder.nmsIouThreshold, null)
 
 assert.deepEqual(resolveLabelsFromMetadata({
   names: '{"0":"himars","1":"radar"}',
@@ -95,11 +100,125 @@ const detections = decodeDetections(
     },
   }),
   { output0 },
-  640,
-  640,
+  {
+    sourceWidth: 640,
+    sourceHeight: 640,
+    targetWidth: 640,
+    targetHeight: 640,
+    resizeMode: 'stretch',
+    scaleX: 1,
+    scaleY: 1,
+    padLeft: 0,
+    padTop: 0,
+    contentWidth: 640,
+    contentHeight: 640,
+  },
 )
 
 assert.equal(detections.length, 2)
 assert.ok(detections[0].confidence >= detections[1].confidence)
+
+const yoloWithOverlap: TensorLike = {
+  dims: [1, 6, 3],
+  data: new Float32Array([
+    0.50, 0.51, 0.20,
+    0.50, 0.50, 0.20,
+    0.20, 0.20, 0.08,
+    0.20, 0.20, 0.08,
+    0.95, 0.94, 0.91,
+    0.10, 0.10, 0.10,
+  ]),
+}
+
+const nmsDetections = decodeDetections(
+  ultralyticsYoloContract,
+  { output0: yoloWithOverlap },
+  {
+    sourceWidth: 640,
+    sourceHeight: 640,
+    targetWidth: 640,
+    targetHeight: 640,
+    resizeMode: 'stretch',
+    scaleX: 1,
+    scaleY: 1,
+    padLeft: 0,
+    padTop: 0,
+    contentWidth: 640,
+    contentHeight: 640,
+  },
+)
+
+assert.equal(nmsDetections.length, 2)
+assert.ok(nmsDetections[0].confidence > nmsDetections[1].confidence)
+
+const stretchDetections = decodeDetections(
+  hfContract,
+  {
+    logits: {
+      dims: [1, 1, 1],
+      data: new Float32Array([4]),
+    },
+    pred_boxes: {
+      dims: [1, 1, 4],
+      data: new Float32Array([0.5, 0.5, 0.25, 0.25]),
+    },
+  },
+  {
+    sourceWidth: 320,
+    sourceHeight: 160,
+    targetWidth: 640,
+    targetHeight: 640,
+    resizeMode: 'stretch',
+    scaleX: 2,
+    scaleY: 4,
+    padLeft: 0,
+    padTop: 0,
+    contentWidth: 640,
+    contentHeight: 640,
+  },
+)
+
+assert.equal(stretchDetections.length, 1)
+assert.deepEqual(stretchDetections[0].box, {
+  x: 120,
+  y: 60,
+  width: 80,
+  height: 40,
+})
+
+const padDetections = decodeDetections(
+  hfContract,
+  {
+    logits: {
+      dims: [1, 1, 1],
+      data: new Float32Array([4]),
+    },
+    pred_boxes: {
+      dims: [1, 1, 4],
+      data: new Float32Array([0.5, 0.5, 0.25, 0.25]),
+    },
+  },
+  {
+    sourceWidth: 320,
+    sourceHeight: 160,
+    targetWidth: 640,
+    targetHeight: 640,
+    resizeMode: 'pad',
+    scaleX: 2,
+    scaleY: 2,
+    padLeft: 0,
+    padTop: 160,
+    contentWidth: 640,
+    contentHeight: 320,
+  },
+)
+
+assert.equal(padDetections.length, 1)
+assert.deepEqual(padDetections[0].box, {
+  x: 120,
+  y: 40,
+  width: 80,
+  height: 80,
+})
 
 console.log('contracts tests passed')

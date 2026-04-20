@@ -9,6 +9,7 @@ const rootDir = fileURLToPath(new URL('.', import.meta.url))
 export default defineConfig({
   plugins: [react()],
   resolve: {
+    conditions: ['onnxruntime-web-use-extern-wasm'],
     alias: {
       '@contracts': resolve(rootDir, '../contracts/src/index.ts'),
     },

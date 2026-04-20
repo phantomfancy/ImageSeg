@@ -40,6 +40,7 @@ const ultralyticsOnnx = await readAsFile(path.join(trainingResultDirectory, 'yol
 const ultralyticsDraft = await inspectOnnxModelFile(ultralyticsOnnx)
 assert.equal(ultralyticsDraft.family, 'ultralytics-yolo-detect')
 assert.equal(ultralyticsDraft.draftContract.labelSource, 'embedded-metadata')
+assert.equal(ultralyticsDraft.webGpuCompatibility.supported, true)
 assert.deepEqual(deriveModelImportControls(ultralyticsDraft.family, true), {
   configEnabled: false,
   configRequired: false,
@@ -52,6 +53,9 @@ const ultralyticsModel = await finalizeModelImport({
 })
 assert.equal(ultralyticsModel.contract.family, 'ultralytics-yolo-detect')
 assert.deepEqual(ultralyticsModel.contract.labels, { 0: 'himars' })
+assert.equal(ultralyticsModel.webGpuCompatibility.supported, true)
+assert.equal(ultralyticsModel.contract.decoder.scoreThreshold, 0.08)
+assert.equal(ultralyticsModel.contract.decoder.nmsIouThreshold, 0.45)
 
 const hfOnnx = await readAsFile(path.join(trainingResultDirectory, 'rtdetrv2_himars_style_hugginface', 'model_fp16.onnx'))
 const hfConfig = await readAsFile(path.join(trainingResultDirectory, 'rtdetrv2_himars_style_hugginface', CONFIG_FILE_NAME))
@@ -59,6 +63,11 @@ const hfPreprocessor = await readAsFile(path.join(trainingResultDirectory, 'rtde
 
 const hfDraft = await inspectOnnxModelFile(hfOnnx)
 assert.equal(hfDraft.family, 'hf-detr-like')
+assert.equal(hfDraft.webGpuCompatibility.supported, false)
+assert.equal(
+  hfDraft.webGpuCompatibility.issues.some((item) => item.code === 'webgpu-cast-int64-unsupported'),
+  true,
+)
 assert.deepEqual(deriveModelImportControls(hfDraft.family, true), {
   configEnabled: true,
   configRequired: true,
@@ -84,6 +93,7 @@ assert.deepEqual(hfModel.contract.labels, { 0: 'himars' })
 assert.equal(hfModel.contract.preprocess.resizeMode, 'pad')
 assert.equal(hfModel.contract.preprocess.imageWidth, 640)
 assert.equal(hfModel.contract.preprocess.imageHeight, 640)
+assert.equal(hfModel.webGpuCompatibility.supported, false)
 
 const withoutPreprocessor = await finalizeModelImport({
   onnxModel: hfDraft,

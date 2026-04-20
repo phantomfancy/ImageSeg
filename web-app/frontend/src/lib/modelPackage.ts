@@ -8,7 +8,10 @@ import {
   type ResolvedModelContract,
   type TensorDescriptor,
 } from '../../../contracts/src/index.ts'
-import { inspectOnnxModelBytes } from './modelIntrospection.ts'
+import {
+  inspectOnnxModelBytes,
+  type WebGpuCompatibilityReport,
+} from './modelIntrospection.ts'
 
 type JsonObject = Record<string, unknown>
 
@@ -31,6 +34,7 @@ export interface InspectedOnnxModel {
   outputs: TensorDescriptor[]
   embeddedLabels: Record<number, string>
   draftContract: ResolvedModelContract
+  webGpuCompatibility: WebGpuCompatibilityReport
 }
 
 export interface FinalizeModelImportOptions {
@@ -45,6 +49,7 @@ export interface InspectedModelPackage {
   bytes: Uint8Array
   contract: ResolvedModelContract
   sidecars: ModelPackageSidecars
+  webGpuCompatibility: WebGpuCompatibilityReport
 }
 
 export interface DirectoryFileHandleLike {
@@ -72,6 +77,7 @@ export async function inspectOnnxModelFile(file: File): Promise<InspectedOnnxMod
   const warnings = family === 'hf-detr-like'
     ? [`检测到 Hugging Face 风格模型，必须导入 ${CONFIG_FILE_NAME}；${PREPROCESSOR_CONFIG_FILE_NAME} 可选。`]
     : []
+  warnings.push(...toWebGpuCompatibilityWarnings(parsedModel.webGpuCompatibility))
 
   return {
     key: buildModelKey(file),
@@ -89,12 +95,13 @@ export async function inspectOnnxModelFile(file: File): Promise<InspectedOnnxMod
       labelSource,
       warnings,
     }),
+    webGpuCompatibility: parsedModel.webGpuCompatibility,
   }
 }
 
 export async function finalizeModelImport(options: FinalizeModelImportOptions): Promise<InspectedModelPackage> {
   const { onnxModel } = options
-  const warnings: string[] = []
+  const warnings: string[] = toWebGpuCompatibilityWarnings(onnxModel.webGpuCompatibility)
   let labels = onnxModel.embeddedLabels
   let labelSource: LabelSourceKind =
     Object.keys(labels).length > 0 ? 'embedded-metadata' : 'fallback-class-index'
@@ -149,6 +156,7 @@ export async function finalizeModelImport(options: FinalizeModelImportOptions): 
       configFileName,
       preprocessorConfigFileName,
     },
+    webGpuCompatibility: onnxModel.webGpuCompatibility,
   }
 }
 
@@ -302,4 +310,8 @@ function toSize(value: unknown): { width: number; height: number } | undefined {
   }
 
   return { width, height }
+}
+
+function toWebGpuCompatibilityWarnings(report: WebGpuCompatibilityReport): string[] {
+  return report.issues.map((item) => item.message)
 }

@@ -2,6 +2,7 @@ import { startTransition, useCallback, useEffect, useRef, useState } from 'react
 import type { DetectionRun, ImportedModel } from './lib/onnxRuntime'
 import {
   drawSourceToCanvas,
+  getWebGpuSupportState,
   inspectImportedModel,
   runDetectionOnCanvas,
   runSingleImageDetection,
@@ -91,6 +92,8 @@ function App() {
   const supportsCamera =
     typeof navigator !== 'undefined' &&
     Boolean(navigator.mediaDevices?.getUserMedia)
+  const webGpuSupportState = getWebGpuSupportState()
+  const isWebGpuSupported = webGpuSupportState.supported
   const preferredVideoMimeType = getPreferredVideoMimeType()
   const supportsVideoExport = Boolean(preferredVideoMimeType)
 
@@ -104,6 +107,15 @@ function App() {
     importedModel?.sidecars.configFileName ?? configFile?.name,
     importedModel?.sidecars.preprocessorConfigFileName ?? preprocessorConfigFile?.name,
   ].filter(Boolean).join(', ') || '-'
+  const isImportedModelWebGpuCompatible = importedModel?.webGpuCompatibility.supported ?? true
+  const importedModelCompatibilityMessage =
+    importedModel && !importedModel.webGpuCompatibility.supported
+      ? formatWebGpuCompatibilityMessage(importedModel.webGpuCompatibility)
+      : ''
+  const displayedRuntimeMessage =
+    runtimeMessage ||
+    importedModelCompatibilityMessage ||
+    (importedModel && !isWebGpuSupported ? (webGpuSupportState.message ?? '') : '')
   const currentTimeLabel = inputMode === 'camera' && streamState === 'running'
     ? 'Live'
     : currentSourceTime === null
@@ -112,7 +124,7 @@ function App() {
 
   const canRunImage =
     inputMode === 'image' &&
-    Boolean(imageFile && importedModel && !modelBusy && !imageDetectBusy && streamState === 'idle')
+    Boolean(imageFile && importedModel && isImportedModelWebGpuCompatible && isWebGpuSupported && !modelBusy && !imageDetectBusy && streamState === 'idle')
   const canExportImage =
     inputMode === 'image' &&
     hasRenderedResult &&
@@ -120,16 +132,16 @@ function App() {
     streamState === 'idle'
   const canStartVideo =
     inputMode === 'video' &&
-    Boolean(videoFile && importedModel && streamState === 'idle')
+    Boolean(videoFile && importedModel && isImportedModelWebGpuCompatible && isWebGpuSupported && streamState === 'idle')
   const canStopVideo =
     inputMode === 'video' &&
     streamState === 'running'
   const canExportVideo =
     inputMode === 'video' &&
-    Boolean(videoFile && importedModel && streamState === 'idle' && supportsVideoExport)
+    Boolean(videoFile && importedModel && isImportedModelWebGpuCompatible && isWebGpuSupported && streamState === 'idle' && supportsVideoExport)
   const canStartCamera =
     inputMode === 'camera' &&
-    Boolean(importedModel && streamState === 'idle' && !cameraBusy && supportsCamera)
+    Boolean(importedModel && isImportedModelWebGpuCompatible && isWebGpuSupported && streamState === 'idle' && !cameraBusy && supportsCamera)
   const canStopCamera =
     inputMode === 'camera' &&
     streamState === 'running'
@@ -272,7 +284,7 @@ function App() {
         setOnnxModelDraft(nextOnnxModel)
         setImportedModel(model)
         clearRecognitionOutputs()
-        setStatusMessage(formatModelReadyMessage(model))
+        setStatusMessage(formatModelReadyMessage(model, webGpuSupportState))
       })
     } catch (error) {
       setStatusMessage(`模型解析失败：${formatError(error)}`)
@@ -309,7 +321,7 @@ function App() {
         setConfigFile(file)
         setImportedModel(model)
         clearRecognitionOutputs()
-        setStatusMessage(formatModelReadyMessage(model))
+        setStatusMessage(formatModelReadyMessage(model, webGpuSupportState))
       })
     } catch (error) {
       setStatusMessage(`config.json 导入失败：${formatError(error)}`)
@@ -356,7 +368,7 @@ function App() {
         setPreprocessorConfigFile(file)
         setImportedModel(model)
         clearRecognitionOutputs()
-        setStatusMessage(formatModelReadyMessage(model))
+        setStatusMessage(formatModelReadyMessage(model, webGpuSupportState))
       })
     } catch (error) {
       setStatusMessage(`preprocessor_config.json 导入失败：${formatError(error)}`)
@@ -419,7 +431,7 @@ function App() {
         }
         setImportedModel(model)
         clearRecognitionOutputs()
-        setStatusMessage(formatAutoDiscoveredMessage(model, discovered))
+        setStatusMessage(formatAutoDiscoveredMessage(model, discovered, webGpuSupportState))
       })
     } catch (error) {
       if (isAbortError(error)) {
@@ -438,6 +450,11 @@ function App() {
       return
     }
 
+    if (!isWebGpuSupported) {
+      setStatusMessage(webGpuSupportState.message ?? '当前浏览器不支持 WebGPU。')
+      return
+    }
+
     stopActiveStream()
     setImageDetectBusy(true)
     clearRecognitionOutputs()
@@ -452,6 +469,7 @@ function App() {
           : `识别完成，共检测到 ${detectionRun.recognitionResult.detections.length} 个目标。`,
       )
     } catch (error) {
+      setRuntimeMessage(formatError(error))
       setStatusMessage(`识别失败：${formatError(error)}`)
     } finally {
       setImageDetectBusy(false)
@@ -479,6 +497,11 @@ function App() {
       return
     }
 
+    if (!isWebGpuSupported) {
+      setStatusMessage(webGpuSupportState.message ?? '当前浏览器不支持 WebGPU。')
+      return
+    }
+
     clearRecognitionOutputs()
     setStatusMessage(`正在启动视频识别：${videoFile.name}。`)
 
@@ -499,6 +522,11 @@ function App() {
 
   async function handleStartCameraDetection() {
     if (!importedModel) {
+      return
+    }
+
+    if (!isWebGpuSupported) {
+      setStatusMessage(webGpuSupportState.message ?? '当前浏览器不支持 WebGPU。')
       return
     }
 
@@ -544,6 +572,11 @@ function App() {
 
   async function handleExportVideo() {
     if (!importedModel || !videoFile || !videoPreviewUrl) {
+      return
+    }
+
+    if (!isWebGpuSupported) {
+      setStatusMessage(webGpuSupportState.message ?? '当前浏览器不支持 WebGPU。')
       return
     }
 
@@ -710,7 +743,7 @@ function App() {
     startTransition(() => {
       setHasRenderedResult(true)
       setResultProvider(detectionRun.providerName)
-      setRuntimeMessage(detectionRun.fallbackReason ?? '')
+      setRuntimeMessage(detectionRun.runtimeMessage ?? '')
       setCurrentSourceTime(timeSeconds)
       setDetectionItems(toDetectionItems(detectionRun))
     })
@@ -980,7 +1013,7 @@ function App() {
           <div className="status-box">
             <div className="status-box__title">状态</div>
             <p>{statusMessage}</p>
-            {runtimeMessage ? <p>{runtimeMessage}</p> : null}
+            {displayedRuntimeMessage ? <p>{displayedRuntimeMessage}</p> : null}
           </div>
         </article>
 
@@ -1168,21 +1201,30 @@ function EmptyState(props: { text: string }) {
   )
 }
 
-function formatModelReadyMessage(model: ImportedModel): string {
+function formatModelReadyMessage(
+  model: ImportedModel,
+  webGpuSupportState: { supported: boolean; message?: string },
+): string {
   const sidecars = [
     model.sidecars.configFileName,
     model.sidecars.preprocessorConfigFileName,
   ].filter(Boolean)
-  const runtimeNote = model.fallbackReason ? ` ${model.fallbackReason}` : ''
+  const runtimeNote = !webGpuSupportState.supported && webGpuSupportState.message
+    ? ` ${webGpuSupportState.message}`
+    : ''
+  const compatibilityNote = !model.webGpuCompatibility.supported
+    ? ` ${formatWebGpuCompatibilityMessage(model.webGpuCompatibility)}`
+    : ''
 
   return sidecars.length > 0
-    ? `模型解析成功：${model.contract.family}，已使用 ${sidecars.join('、')}，当前执行提供器为 ${model.providerName}。${runtimeNote}`
-    : `模型解析成功：${model.contract.family}，当前执行提供器为 ${model.providerName}。${runtimeNote}`
+    ? `模型解析成功：${model.contract.family}，已使用 ${sidecars.join('、')}，当前执行提供器为 ${model.providerName}。${runtimeNote}${compatibilityNote}`
+    : `模型解析成功：${model.contract.family}，当前执行提供器为 ${model.providerName}。${runtimeNote}${compatibilityNote}`
 }
 
 function formatAutoDiscoveredMessage(
   model: ImportedModel,
   discovered: { configFile?: File; preprocessorConfigFile?: File },
+  webGpuSupportState: { supported: boolean; message?: string },
 ): string {
   const autoFiles = [
     discovered.configFile?.name,
@@ -1190,8 +1232,8 @@ function formatAutoDiscoveredMessage(
   ].filter(Boolean)
 
   return autoFiles.length > 0
-    ? `已自动找到 ${autoFiles.join('、')}，${formatModelReadyMessage(model)}`
-    : formatModelReadyMessage(model)
+    ? `已自动找到 ${autoFiles.join('、')}，${formatModelReadyMessage(model, webGpuSupportState)}`
+    : formatModelReadyMessage(model, webGpuSupportState)
 }
 
 function buildPendingHfMessage(
@@ -1229,6 +1271,11 @@ function formatDims(dims: Array<number | string | null>): string {
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function formatWebGpuCompatibilityMessage(report: { supported: boolean; issues: Array<{ severity: string; message: string }> }): string {
+  const errorMessage = report.issues.find((item) => item.severity === 'error')?.message
+  return errorMessage ?? '当前模型不兼容 WebGPU，无法执行识别。'
 }
 
 function toDetectionItems(run: DetectionRun): DetectionItem[] {

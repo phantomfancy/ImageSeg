@@ -1,6 +1,9 @@
 import * as ort from 'onnxruntime-web/webgpu'
 import {
   decodeDetections,
+  normalizeScore,
+  sigmoid,
+  type PreprocessedImageGeometry,
   type RecognitionResult,
   type ResolvedModelContract,
   type TensorLike,
@@ -14,37 +17,59 @@ import {
 ort.env.wasm.proxy = false
 ort.env.wasm.numThreads = 1
 ort.env.wasm.wasmPaths = {
-  mjs: new URL('/ort/ort-wasm-simd-threaded.jsep.mjs', window.location.href),
-  wasm: new URL('/ort/ort-wasm-simd-threaded.jsep.wasm', window.location.href),
+  mjs: new URL('/ort/ort-wasm-simd-threaded.asyncify.mjs', window.location.href),
+  wasm: new URL('/ort/ort-wasm-simd-threaded.asyncify.wasm', window.location.href),
 }
 
 if (ort.env.webgpu) {
   ort.env.webgpu.powerPreference = 'high-performance'
 }
 
+const WEBGPU_UNSUPPORTED_MESSAGE = '当前浏览器不支持 WebGPU，无法执行识别。'
+
 type SessionState = {
   session: ort.InferenceSession
-  providerName: 'webgpu' | 'wasm'
-  fallbackReason?: string
+  providerName: 'webgpu'
 }
 
 const sessionCache = new Map<string, Promise<SessionState>>()
+
+export interface WebGpuSupportState {
+  supported: boolean
+  message?: string
+}
 
 export interface ImportedModel {
   key: string
   fileName: string
   bytes: Uint8Array
   contract: InspectedModelPackage['contract']
-  providerName: 'webgpu' | 'wasm' | 'unavailable'
-  fallbackReason?: string
+  providerName: 'webgpu'
   sidecars: InspectedModelPackage['sidecars']
+  webGpuCompatibility: InspectedModelPackage['webGpuCompatibility']
 }
 
 export interface DetectionRun {
-  providerName: 'webgpu' | 'wasm'
-  fallbackReason?: string
+  providerName: 'webgpu'
   annotatedCanvas: HTMLCanvasElement
   recognitionResult: RecognitionResult
+  runtimeMessage?: string
+}
+
+type PreparedInput = {
+  tensor: ort.Tensor
+  geometry: PreprocessedImageGeometry
+}
+
+export function getWebGpuSupportState(): WebGpuSupportState {
+  if (typeof navigator === 'undefined' || !('gpu' in navigator)) {
+    return {
+      supported: false,
+      message: WEBGPU_UNSUPPORTED_MESSAGE,
+    }
+  }
+
+  return { supported: true }
 }
 
 export async function inspectImportedModel(options: FinalizeModelImportOptions): Promise<ImportedModel> {
@@ -57,33 +82,14 @@ export async function inspectImportedModel(options: FinalizeModelImportOptions):
     sidecars,
   } = inspectedPackage
 
-  try {
-    const sessionState = await getSessionState(key, bytes)
-
-    return {
-      key,
-      fileName,
-      bytes,
-      contract,
-      providerName: sessionState.providerName,
-      fallbackReason: sessionState.fallbackReason,
-      sidecars,
-    }
-  } catch (error) {
-    return {
-      key,
-      fileName,
-      bytes,
-      contract: {
-        ...contract,
-        warnings: [
-          `当前运行时暂时无法为该模型建立推理会话：${formatError(error)}`,
-          ...contract.warnings,
-        ],
-      },
-      providerName: 'unavailable',
-      sidecars,
-    }
+  return {
+    key,
+    fileName,
+    bytes,
+    contract,
+    providerName: 'webgpu',
+    sidecars,
+    webGpuCompatibility: inspectedPackage.webGpuCompatibility,
   }
 }
 
@@ -100,22 +106,21 @@ export async function runDetectionOnCanvas(
   sourceCanvas: HTMLCanvasElement,
   inputSource: string,
 ): Promise<DetectionRun> {
+  assertModelWebGpuCompatible(model)
   const sessionState = await getSessionState(model.key, model.bytes)
-  const inputTensor = createInputTensor(sourceCanvas, model.contract)
+  const preparedInput = createPreparedInput(sourceCanvas, model.contract)
   const outputMap = await sessionState.session.run({
-    [model.contract.preprocess.inputTensorName]: inputTensor,
+    [model.contract.preprocess.inputTensorName]: preparedInput.tensor,
   })
   const normalizedOutputs = await normalizeOutputs(outputMap)
   const detections = decodeDetections(
     model.contract,
     normalizedOutputs,
-    sourceCanvas.width,
-    sourceCanvas.height,
+    preparedInput.geometry,
   )
 
   return {
     providerName: sessionState.providerName,
-    fallbackReason: sessionState.fallbackReason,
     annotatedCanvas: drawDetections(sourceCanvas, detections),
     recognitionResult: {
       inputSource,
@@ -123,16 +128,20 @@ export async function runDetectionOnCanvas(
       detectedAtUtc: new Date().toISOString(),
       detections,
     },
+    runtimeMessage: detections.length === 0
+      ? buildNoDetectionsRuntimeMessage(model.contract, normalizedOutputs)
+      : undefined,
   }
 }
 
 async function getSessionState(key: string, bytes: Uint8Array): Promise<SessionState> {
+  assertWebGpuSupported()
   const existing = sessionCache.get(key)
   if (existing) {
     return existing
   }
 
-  const promise = createSessionWithFallback(bytes).catch((error: unknown) => {
+  const promise = createWebGpuSession(bytes).catch((error: unknown) => {
     sessionCache.delete(key)
     throw error
   })
@@ -141,50 +150,15 @@ async function getSessionState(key: string, bytes: Uint8Array): Promise<SessionS
   return promise
 }
 
-async function createSessionWithFallback(bytes: Uint8Array): Promise<SessionState> {
-  const plans: Array<{
-    providerName: 'webgpu' | 'wasm'
-    options: ort.InferenceSession.SessionOptions
-  }> = []
-  let fallbackReason: string | undefined
-
-  if (typeof navigator !== 'undefined' && 'gpu' in navigator) {
-    plans.push({
-      providerName: 'webgpu',
-      options: {
-        executionProviders: ['webgpu'],
-      },
-    })
-  } else {
-    fallbackReason = '当前浏览器未提供 WebGPU，已使用 WASM。'
-  }
-
-  plans.push({
-    providerName: 'wasm',
-    options: {
-      executionProviders: ['wasm'],
-    },
+async function createWebGpuSession(bytes: Uint8Array): Promise<SessionState> {
+  const session = await ort.InferenceSession.create(bytes, {
+    executionProviders: ['webgpu'],
   })
 
-  const errors: string[] = []
-  for (const plan of plans) {
-    try {
-      const session = await ort.InferenceSession.create(bytes, plan.options)
-      return {
-        session,
-        providerName: plan.providerName,
-        fallbackReason,
-      }
-    } catch (error) {
-      const message = formatError(error)
-      errors.push(`${plan.providerName}: ${message}`)
-      if (plan.providerName === 'webgpu') {
-        fallbackReason = `WebGPU 初始化失败，已回退到 WASM：${message}`
-      }
-    }
+  return {
+    session,
+    providerName: 'webgpu',
   }
-
-  throw new Error(`无法加载 ONNX 模型。${errors.join('；')}`)
 }
 
 async function normalizeOutputs(
@@ -252,10 +226,10 @@ export function drawSourceToCanvas(
   return canvas
 }
 
-function createInputTensor(
+function createPreparedInput(
   sourceCanvas: HTMLCanvasElement,
   contract: ResolvedModelContract,
-): ort.Tensor {
+): PreparedInput {
   const targetWidth = contract.preprocess.imageWidth
   const targetHeight = contract.preprocess.imageHeight
   const preprocessCanvas = document.createElement('canvas')
@@ -263,7 +237,7 @@ function createInputTensor(
   preprocessCanvas.height = targetHeight
 
   const context = get2dContext(preprocessCanvas)
-  context.drawImage(sourceCanvas, 0, 0, targetWidth, targetHeight)
+  const geometry = drawPreprocessedImage(context, sourceCanvas, contract)
 
   const imageData = context.getImageData(0, 0, targetWidth, targetHeight)
   const tensorData = new Float32Array(3 * targetWidth * targetHeight)
@@ -276,7 +250,10 @@ function createInputTensor(
     tensorData[channelSize * 2 + index] = imageData.data[pixelOffset + 2] / 255
   }
 
-  return new ort.Tensor('float32', tensorData, [1, 3, targetHeight, targetWidth])
+  return {
+    tensor: new ort.Tensor('float32', tensorData, [1, 3, targetHeight, targetWidth]),
+    geometry,
+  }
 }
 
 function ensureNumericTensorData(data: ort.Tensor['data'], outputName: string): ArrayLike<number> {
@@ -329,6 +306,60 @@ function get2dContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
   return context
 }
 
+function drawPreprocessedImage(
+  context: CanvasRenderingContext2D,
+  sourceCanvas: HTMLCanvasElement,
+  contract: ResolvedModelContract,
+): PreprocessedImageGeometry {
+  const targetWidth = contract.preprocess.imageWidth
+  const targetHeight = contract.preprocess.imageHeight
+  const sourceWidth = sourceCanvas.width
+  const sourceHeight = sourceCanvas.height
+  context.clearRect(0, 0, targetWidth, targetHeight)
+  context.fillStyle = '#000'
+  context.fillRect(0, 0, targetWidth, targetHeight)
+
+  if (contract.preprocess.resizeMode === 'pad') {
+    const scale = Math.min(targetWidth / sourceWidth, targetHeight / sourceHeight)
+    const contentWidth = sourceWidth * scale
+    const contentHeight = sourceHeight * scale
+    const padLeft = (targetWidth - contentWidth) / 2
+    const padTop = (targetHeight - contentHeight) / 2
+
+    context.drawImage(sourceCanvas, padLeft, padTop, contentWidth, contentHeight)
+
+    return {
+      sourceWidth,
+      sourceHeight,
+      targetWidth,
+      targetHeight,
+      resizeMode: 'pad',
+      scaleX: contentWidth / sourceWidth,
+      scaleY: contentHeight / sourceHeight,
+      padLeft,
+      padTop,
+      contentWidth,
+      contentHeight,
+    }
+  }
+
+  context.drawImage(sourceCanvas, 0, 0, targetWidth, targetHeight)
+
+  return {
+    sourceWidth,
+    sourceHeight,
+    targetWidth,
+    targetHeight,
+    resizeMode: 'stretch',
+    scaleX: targetWidth / sourceWidth,
+    scaleY: targetHeight / sourceHeight,
+    padLeft: 0,
+    padTop: 0,
+    contentWidth: targetWidth,
+    contentHeight: targetHeight,
+  }
+}
+
 function resolveSourceDimensions(source: CanvasImageSource): { width: number; height: number } {
   if (source instanceof HTMLVideoElement) {
     return {
@@ -367,6 +398,188 @@ function pickColor(index: number): string {
   return palette[index % palette.length]
 }
 
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+function assertWebGpuSupported() {
+  const supportState = getWebGpuSupportState()
+  if (!supportState.supported) {
+    throw new Error(supportState.message ?? WEBGPU_UNSUPPORTED_MESSAGE)
+  }
+}
+
+function assertModelWebGpuCompatible(model: ImportedModel) {
+  if (model.webGpuCompatibility.supported) {
+    return
+  }
+
+  const issueMessage = model.webGpuCompatibility.issues
+    .filter((item) => item.severity === 'error')
+    .map((item) => item.message)
+    .join(' ')
+
+  throw new Error(issueMessage || '当前模型不兼容 WebGPU，无法执行识别。')
+}
+
+function buildNoDetectionsRuntimeMessage(
+  contract: ResolvedModelContract,
+  outputs: Record<string, TensorLike>,
+): string {
+  const highestScore = estimateHighestCandidateScore(contract, outputs)
+  if (highestScore === null) {
+    return '推理已执行完成，但当前没有达到阈值的候选目标。'
+  }
+
+  return `推理已执行完成，当前最高候选分数 ${(highestScore * 100).toFixed(1)}%，低于阈值 ${(contract.decoder.scoreThreshold * 100).toFixed(1)}%。`
+}
+
+function estimateHighestCandidateScore(
+  contract: ResolvedModelContract,
+  outputs: Record<string, TensorLike>,
+): number | null {
+  switch (contract.decoder.layoutKind) {
+    case 'logits-and-pred-boxes':
+      return estimateHighestHfScore(contract, outputs)
+    case 'ultralytics-anchors':
+      return estimateHighestAnchorScore(contract, outputs)
+    case 'ultralytics-queries':
+      return estimateHighestQueryScore(contract, outputs)
+    default:
+      return null
+  }
+}
+
+function estimateHighestHfScore(
+  contract: ResolvedModelContract,
+  outputs: Record<string, TensorLike>,
+): number | null {
+  const logits = resolveTensor(outputs, contract.decoder.outputTensorNames, 'logits')
+  const queryCount = logits.dims.at(-2) ?? 0
+  const classCount = logits.dims.at(-1) ?? 0
+  let bestScore = Number.NEGATIVE_INFINITY
+
+  for (let queryIndex = 0; queryIndex < queryCount; queryIndex += 1) {
+    if (classCount === 1) {
+      bestScore = Math.max(bestScore, sigmoid(readLogit(logits, queryIndex, 0)))
+      continue
+    }
+
+    const probabilities = softmax(logits, queryIndex, classCount)
+    for (const probability of probabilities) {
+      bestScore = Math.max(bestScore, probability)
+    }
+  }
+
+  return Number.isFinite(bestScore) ? bestScore : null
+}
+
+function estimateHighestAnchorScore(
+  contract: ResolvedModelContract,
+  outputs: Record<string, TensorLike>,
+): number | null {
+  const output = resolveTensor(outputs, contract.decoder.outputTensorNames, 'output0')
+  const channelCount = output.dims[1] ?? 0
+  const anchorCount = output.dims[2] ?? 0
+  const classCount = Math.max(1, channelCount - 4)
+  let bestScore = Number.NEGATIVE_INFINITY
+
+  for (let anchorIndex = 0; anchorIndex < anchorCount; anchorIndex += 1) {
+    for (let classIndex = 0; classIndex < classCount; classIndex += 1) {
+      bestScore = Math.max(bestScore, normalizeScore(readAnchor(output, classIndex + 4, anchorIndex)))
+    }
+  }
+
+  return Number.isFinite(bestScore) ? bestScore : null
+}
+
+function estimateHighestQueryScore(
+  contract: ResolvedModelContract,
+  outputs: Record<string, TensorLike>,
+): number | null {
+  const output = resolveTensor(outputs, contract.decoder.outputTensorNames, 'output0')
+  const queryCount = output.dims[1] ?? 0
+  const vectorLength = output.dims[2] ?? 0
+  const classCount = Math.max(1, vectorLength - 4)
+  let bestScore = Number.NEGATIVE_INFINITY
+
+  for (let queryIndex = 0; queryIndex < queryCount; queryIndex += 1) {
+    for (let classIndex = 0; classIndex < classCount; classIndex += 1) {
+      bestScore = Math.max(bestScore, normalizeScore(readQuery(output, queryIndex, classIndex + 4)))
+    }
+  }
+
+  return Number.isFinite(bestScore) ? bestScore : null
+}
+
+function resolveTensor(
+  outputs: Record<string, TensorLike>,
+  preferredNames: string[],
+  expectedName: string,
+): TensorLike {
+  const normalizedExpectedName = expectedName.toLowerCase()
+  const exactPreferredNames = preferredNames.filter((name) => name.toLowerCase() === normalizedExpectedName)
+
+  for (const name of exactPreferredNames) {
+    const tensor = outputs[name]
+    if (tensor) {
+      return tensor
+    }
+  }
+
+  const exactKey = Object.keys(outputs).find((item) => item.toLowerCase() === normalizedExpectedName)
+  if (exactKey) {
+    return outputs[exactKey]
+  }
+
+  const partialPreferredName = preferredNames.find((name) => name.toLowerCase().includes(normalizedExpectedName))
+  if (partialPreferredName && outputs[partialPreferredName]) {
+    return outputs[partialPreferredName]
+  }
+
+  const partialKey = Object.keys(outputs).find((item) => item.toLowerCase().includes(normalizedExpectedName))
+  if (partialKey) {
+    return outputs[partialKey]
+  }
+
+  if (preferredNames.length === 1 && outputs[preferredNames[0]]) {
+    return outputs[preferredNames[0]]
+  }
+
+  throw new Error(`模型输出中未找到 ${expectedName}`)
+}
+
+function readLogit(tensor: TensorLike, queryIndex: number, classIndex: number): number {
+  const classCount = tensor.dims.at(-1) ?? 0
+  return Number(tensor.data[queryIndex * classCount + classIndex] ?? 0)
+}
+
+function readAnchor(tensor: TensorLike, channelIndex: number, anchorIndex: number): number {
+  const anchorCount = tensor.dims[2] ?? 0
+  return Number(tensor.data[channelIndex * anchorCount + anchorIndex] ?? 0)
+}
+
+function readQuery(tensor: TensorLike, queryIndex: number, itemIndex: number): number {
+  const vectorLength = tensor.dims[2] ?? 0
+  return Number(tensor.data[queryIndex * vectorLength + itemIndex] ?? 0)
+}
+
+function softmax(tensor: TensorLike, queryIndex: number, classCount: number): number[] {
+  const values = new Array<number>(classCount).fill(0)
+  let maxValue = Number.NEGATIVE_INFINITY
+
+  for (let classIndex = 0; classIndex < classCount; classIndex += 1) {
+    const current = readLogit(tensor, queryIndex, classIndex)
+    if (current > maxValue) {
+      maxValue = current
+    }
+  }
+
+  let sum = 0
+  for (let classIndex = 0; classIndex < classCount; classIndex += 1) {
+    values[classIndex] = Math.exp(readLogit(tensor, queryIndex, classIndex) - maxValue)
+    sum += values[classIndex]
+  }
+
+  if (sum <= 0) {
+    return values
+  }
+
+  return values.map((item) => item / sum)
 }
