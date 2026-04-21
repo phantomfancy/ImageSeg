@@ -16,7 +16,6 @@ type VerificationCase = {
   expected: {
     family: 'ultralytics-yolo-detect' | 'ultralytics-rtdetr' | 'hf-detr-like'
     webGpuSupported: boolean
-    webGpuIssueCode?: string
     labels: Record<number, string>
     labelSource: 'embedded-metadata' | 'sidecar-manifest'
     inputs: Array<{ name: string; dimensions: Array<number | string> }>
@@ -53,8 +52,7 @@ const cases = [
     preprocessor: 'rtdetrv2_himars_style_hugginface/preprocessor_config.json',
     expected: {
       family: 'hf-detr-like',
-      webGpuSupported: false,
-      webGpuIssueCode: 'webgpu-cast-int64-unsupported',
+      webGpuSupported: true,
       labels: { 0: 'himars' },
       labelSource: 'sidecar-manifest',
       inputs: [{ name: 'pixel_values', dimensions: ['batch_size', 3, 'height', 'width'] }],
@@ -70,8 +68,7 @@ const cases = [
     preprocessor: 'rtdetrv2_original_style_hugginface/preprocessor_config.json',
     expected: {
       family: 'hf-detr-like',
-      webGpuSupported: false,
-      webGpuIssueCode: 'webgpu-cast-int64-unsupported',
+      webGpuSupported: true,
       labels: { 0: 'person', 79: 'toothbrush' },
       labelSource: 'sidecar-manifest',
       inputs: [{ name: 'pixel_values', dimensions: ['batch_size', 3, 'height', 'width'] }],
@@ -106,13 +103,6 @@ for (const item of cases) {
   assert.equal(model.contract.labelSource, item.expected.labelSource)
   assert.equal(onnxModel.webGpuCompatibility.supported, item.expected.webGpuSupported)
   assert.equal(model.webGpuCompatibility.supported, item.expected.webGpuSupported)
-
-  if (item.expected.webGpuIssueCode) {
-    assert.equal(
-      onnxModel.webGpuCompatibility.issues.some((issue) => issue.code === item.expected.webGpuIssueCode),
-      true,
-    )
-  }
 
   for (const [labelId, label] of Object.entries(item.expected.labels)) {
     assert.equal(model.contract.labels[Number(labelId)], label)
