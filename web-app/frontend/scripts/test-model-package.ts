@@ -63,11 +63,8 @@ const hfPreprocessor = await readAsFile(path.join(trainingResultDirectory, 'rtde
 
 const hfDraft = await inspectOnnxModelFile(hfOnnx)
 assert.equal(hfDraft.family, 'hf-detr-like')
-assert.equal(hfDraft.webGpuCompatibility.supported, false)
-assert.equal(
-  hfDraft.webGpuCompatibility.issues.some((item) => item.code === 'webgpu-cast-int64-unsupported'),
-  true,
-)
+assert.equal(hfDraft.webGpuCompatibility.supported, true)
+assert.equal(hfDraft.webGpuCompatibility.issues.length, 0)
 assert.deepEqual(deriveModelImportControls(hfDraft.family, true), {
   configEnabled: true,
   configRequired: true,
@@ -93,7 +90,8 @@ assert.deepEqual(hfModel.contract.labels, { 0: 'himars' })
 assert.equal(hfModel.contract.preprocess.resizeMode, 'pad')
 assert.equal(hfModel.contract.preprocess.imageWidth, 640)
 assert.equal(hfModel.contract.preprocess.imageHeight, 640)
-assert.equal(hfModel.webGpuCompatibility.supported, false)
+assert.equal(hfModel.webGpuCompatibility.supported, true)
+assert.equal(hfModel.webGpuCompatibility.issues.length, 0)
 
 const withoutPreprocessor = await finalizeModelImport({
   onnxModel: hfDraft,

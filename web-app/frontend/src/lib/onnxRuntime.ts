@@ -113,7 +113,6 @@ export async function runDetectionOnCanvas(
   inputSource: string,
   options?: RunDetectionOptions,
 ): Promise<DetectionRun> {
-  assertModelWebGpuCompatible(model)
   const sessionState = await getSessionState(model.key, model.bytes)
   const detectionContract = createDetectionContract(model.contract, options)
   const preparedInput = createPreparedInput(sourceCanvas, detectionContract)
@@ -411,19 +410,6 @@ function assertWebGpuSupported() {
   if (!supportState.supported) {
     throw new Error(supportState.message ?? WEBGPU_UNSUPPORTED_MESSAGE)
   }
-}
-
-function assertModelWebGpuCompatible(model: ImportedModel) {
-  if (model.webGpuCompatibility.supported) {
-    return
-  }
-
-  const issueMessage = model.webGpuCompatibility.issues
-    .filter((item) => item.severity === 'error')
-    .map((item) => item.message)
-    .join(' ')
-
-  throw new Error(issueMessage || '当前模型不兼容 WebGPU，无法执行识别。')
 }
 
 function createDetectionContract(

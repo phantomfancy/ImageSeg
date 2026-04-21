@@ -12,7 +12,6 @@ type DecodedModel = {
     output?: Array<unknown>
     valueInfo?: Array<unknown>
     initializer?: Array<TensorInfo>
-    node?: Array<NodeInfo>
   }
   metadataProps?: Array<{ key?: string | null; value?: string | null }>
 }
@@ -34,20 +33,6 @@ type ValueInfo = {
 
 type TensorInfo = {
   name?: string | null
-  dataType?: number | LongLike | null
-}
-
-type NodeInfo = {
-  name?: string | null
-  opType?: string | null
-  input?: Array<string | null>
-  output?: Array<string | null>
-  attribute?: Array<AttributeInfo>
-}
-
-type AttributeInfo = {
-  name?: string | null
-  i?: number | LongLike | null
 }
 
 type LongLike = {
@@ -114,69 +99,16 @@ export async function inspectOnnxModelBytes(bytes: Uint8Array): Promise<ParsedOn
 }
 
 function analyzeWebGpuCompatibility(model: DecodedModel): WebGpuCompatibilityReport {
-  const issues: WebGpuCompatibilityIssue[] = []
-  const graph = model.graph
-  if (!graph) {
+  if (!model.graph) {
     return {
       supported: true,
-      issues,
+      issues: [],
     }
-  }
-
-  const tensorTypes = new Map<string, string>()
-  for (const item of [...(graph.input ?? []), ...(graph.output ?? []), ...(graph.valueInfo ?? [])]) {
-    const valueInfo = item as ValueInfo
-    const name = valueInfo.name?.trim()
-    const elementType = toTensorElementTypeName(valueInfo.type?.tensorType?.elemType)
-    if (name && elementType) {
-      tensorTypes.set(name, elementType)
-    }
-  }
-
-  for (const initializer of graph.initializer ?? []) {
-    const name = initializer.name?.trim()
-    const elementType = toTensorElementTypeName(initializer.dataType)
-    if (name && elementType) {
-      tensorTypes.set(name, elementType)
-    }
-  }
-
-  for (const node of graph.node ?? []) {
-    if ((node.opType ?? '').toLowerCase() !== 'cast') {
-      continue
-    }
-
-    const nodeName = node.name?.trim() || undefined
-    const inputNames = normalizeTensorNames(node.input)
-    const outputNames = normalizeTensorNames(node.output)
-    const attributeTargetType = toTensorElementTypeName(readAttributeInt(node.attribute, 'to'))
-    const involvedTensorTypes = [
-      ...inputNames.map((name) => tensorTypes.get(name)),
-      ...outputNames.map((name) => tensorTypes.get(name)),
-      attributeTargetType,
-    ].filter((item): item is string => Boolean(item))
-
-    if (!involvedTensorTypes.includes('int64')) {
-      continue
-    }
-
-    const tensorName = outputNames[0] ?? inputNames[0]
-    issues.push({
-      severity: 'error',
-      code: 'webgpu-cast-int64-unsupported',
-      message:
-        `检测到 Cast 节点 ${nodeName ? `"${nodeName}" ` : ''}` +
-        `涉及 int64 张量${tensorName ? `（${tensorName}）` : ''}。` +
-        'ORT WebGPU 当前不支持该类型组合，模型无法在当前前端执行。',
-      nodeName,
-      opType: node.opType ?? undefined,
-      tensorName,
-    })
   }
 
   return {
-    supported: !issues.some((item) => item.severity === 'error'),
-    issues,
+    supported: true,
+    issues: [],
   }
 }
 
@@ -215,26 +147,6 @@ function toTensorDescriptor(valueInfo: ValueInfo): TensorDescriptor {
   }
 }
 
-function toTensorElementTypeName(value: number | LongLike | null | undefined): string | null {
-  const elementType = toInteger(value)
-  switch (elementType) {
-    case 1:
-      return 'float32'
-    case 6:
-      return 'int32'
-    case 7:
-      return 'int64'
-    case 9:
-      return 'bool'
-    case 10:
-      return 'float16'
-    case 12:
-      return 'uint32'
-    default:
-      return null
-  }
-}
-
 function toTensorDimension(
   value: number | LongLike | null | undefined,
   dimParam: string | null | undefined,
@@ -265,20 +177,6 @@ function toInteger(value: number | LongLike | null | undefined): number | null {
   }
 
   return null
-}
-
-function normalizeTensorNames(values: Array<string | null> | null | undefined): string[] {
-  return (values ?? [])
-    .map((item) => item?.trim() ?? '')
-    .filter(Boolean)
-}
-
-function readAttributeInt(
-  attributes: Array<AttributeInfo> | null | undefined,
-  name: string,
-): number | null {
-  const attribute = (attributes ?? []).find((item) => item.name === name)
-  return toInteger(attribute?.i)
 }
 
 async function loadOnnxProto(): Promise<{ onnx?: { ModelProto: { decode: (input: Uint8Array) => DecodedModel } } }> {

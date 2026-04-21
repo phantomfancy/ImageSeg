@@ -127,14 +127,8 @@ function App() {
     importedModel?.sidecars.configFileName ?? configFile?.name,
     importedModel?.sidecars.preprocessorConfigFileName ?? preprocessorConfigFile?.name,
   ].filter(Boolean).join(', ') || '-'
-  const isImportedModelWebGpuCompatible = importedModel?.webGpuCompatibility.supported ?? true
-  const importedModelCompatibilityMessage =
-    importedModel && !importedModel.webGpuCompatibility.supported
-      ? formatWebGpuCompatibilityMessage(importedModel.webGpuCompatibility)
-      : ''
   const displayedRuntimeMessage =
     runtimeMessage ||
-    importedModelCompatibilityMessage ||
     (importedModel && !isWebGpuSupported ? (webGpuSupportState.message ?? '') : '')
   const displayedPendingThreshold = pendingDetectionThreshold.toFixed(2)
   const displayedAppliedThreshold = appliedDetectionThreshold.toFixed(2)
@@ -148,7 +142,7 @@ function App() {
 
   const canRunImage =
     inputMode === 'image' &&
-    Boolean(imageFile && importedModel && isImportedModelWebGpuCompatible && isWebGpuSupported && !modelBusy && !imageDetectBusy && streamState === 'idle')
+    Boolean(imageFile && importedModel && isWebGpuSupported && !modelBusy && !imageDetectBusy && streamState === 'idle')
   const canExportImage =
     inputMode === 'image' &&
     hasRenderedResult &&
@@ -156,22 +150,21 @@ function App() {
     streamState === 'idle'
   const canStartVideo =
     inputMode === 'video' &&
-    Boolean(videoFile && importedModel && isImportedModelWebGpuCompatible && isWebGpuSupported && streamState === 'idle')
+    Boolean(videoFile && importedModel && isWebGpuSupported && streamState === 'idle')
   const canStopVideo =
     inputMode === 'video' &&
     streamState === 'running'
   const canExportVideo =
     inputMode === 'video' &&
-    Boolean(videoFile && importedModel && isImportedModelWebGpuCompatible && isWebGpuSupported && streamState === 'idle' && supportsVideoExport)
+    Boolean(videoFile && importedModel && isWebGpuSupported && streamState === 'idle' && supportsVideoExport)
   const canStartCamera =
     inputMode === 'camera' &&
-    Boolean(importedModel && isImportedModelWebGpuCompatible && isWebGpuSupported && streamState === 'idle' && !cameraBusy && supportsCamera)
+    Boolean(importedModel && isWebGpuSupported && streamState === 'idle' && !cameraBusy && supportsCamera)
   const canStopCamera =
     inputMode === 'camera' &&
     streamState === 'running'
   const canAdjustInferenceSettings = Boolean(
     importedModel &&
-    isImportedModelWebGpuCompatible &&
     !modelBusy &&
     streamState !== 'exporting',
   )
@@ -1390,13 +1383,10 @@ function formatModelReadyMessage(
   const runtimeNote = !webGpuSupportState.supported && webGpuSupportState.message
     ? ` ${webGpuSupportState.message}`
     : ''
-  const compatibilityNote = !model.webGpuCompatibility.supported
-    ? ` ${formatWebGpuCompatibilityMessage(model.webGpuCompatibility)}`
-    : ''
 
   return sidecars.length > 0
-    ? `模型解析成功：${model.contract.family}，已使用 ${sidecars.join('、')}，当前执行提供器为 ${model.providerName}。${runtimeNote}${compatibilityNote}`
-    : `模型解析成功：${model.contract.family}，当前执行提供器为 ${model.providerName}。${runtimeNote}${compatibilityNote}`
+    ? `模型解析成功：${model.contract.family}，已使用 ${sidecars.join('、')}，当前执行提供器为 ${model.providerName}。${runtimeNote}`
+    : `模型解析成功：${model.contract.family}，当前执行提供器为 ${model.providerName}。${runtimeNote}`
 }
 
 function formatAutoDiscoveredMessage(
@@ -1449,11 +1439,6 @@ function formatDims(dims: Array<number | string | null>): string {
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
-}
-
-function formatWebGpuCompatibilityMessage(report: { supported: boolean; issues: Array<{ severity: string; message: string }> }): string {
-  const errorMessage = report.issues.find((item) => item.severity === 'error')?.message
-  return errorMessage ?? '当前模型不兼容 WebGPU，无法执行识别。'
 }
 
 function toDetectionItems(run: DetectionRun): DetectionItem[] {
