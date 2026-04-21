@@ -10,6 +10,7 @@
 .npm/
 .npm-*/
 .modules/
+aspire-output/
 web-app/frontend/src/lib/onnxProtoSource.generated.ts
 *.onnx
 *.pt

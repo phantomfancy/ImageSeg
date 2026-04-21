@@ -4,9 +4,12 @@
     "language": "typescript/nodejs"
   },
   "sdk": {
-    "version": "13.2.0"
+    "version": "13.2.2"
   },
   "channel": "stable",
+  "features": {
+    "updateNotificationsEnabled": false
+  },
   "profiles": {
     "https": {
       "applicationUrl": "https://localhost:17134;http://localhost:15170",
@@ -17,6 +20,7 @@
     }
   },
   "packages": {
-    "Aspire.Hosting.JavaScript": "13.2.0"
+    "Aspire.Hosting.JavaScript": "13.2.2",
+    "Aspire.Hosting.Docker": "13.2.2"
   }
 }

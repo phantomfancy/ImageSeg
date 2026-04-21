@@ -12,6 +12,8 @@
   "scripts": {
     "start": "aspire run",
     "dev": "aspire run",
+    "publish": "aspire publish",
+    "deploy": "aspire deploy",
     "restore:aspire": "aspire restore",
     "typecheck": "tsgo -p ./tsconfig.json --noEmit && npm run typecheck --workspace @4cimageseg/frontend && npm run typecheck --workspace @4cimageseg/contracts",
     "build": "npm run build --workspace @4cimageseg/contracts && npm run build --workspace @4cimageseg/frontend",
