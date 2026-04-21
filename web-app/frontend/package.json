@@ -6,8 +6,8 @@
   "scripts": {
     "prepare:ort": "node ./scripts/generate-onnx-proto-source.mjs && node ./scripts/copy-ort-assets.mjs",
     "dev": "npm run prepare:ort && vite --configLoader native",
-    "build": "npm run prepare:ort && tsc -b && vite build --configLoader native",
-    "typecheck": "tsc -b --pretty false",
+    "build": "npm run prepare:ort && tsgo -b && vite build --configLoader native",
+    "typecheck": "tsgo -b --pretty false",
     "lint": "eslint .",
     "test:model-package": "node --experimental-strip-types ./scripts/test-model-package.ts",
     "test": "npm run prepare:ort && npm run lint && npm run typecheck && npm run test:model-package",

@@ -54,3 +54,15 @@ npm run build
 ```powershell
 npm run test
 ```
+
+注意：
+
+- `npm run test` 中的 `npm run test:frontend` 与 `npm run verify:training-models` 依赖 `pytorch-training/training_result` 下的测试模型文件集。
+- 如果当前机器没有准备 `pytorch-training/training_result`，这两项检查会因找不到 `.onnx` / `config.json` / `preprocessor_config.json` 而失败，这属于预期行为，不代表前端类型检查、`tsgo` 迁移或构建链本身存在问题。
+- 在未准备该目录时，可先使用下面的命令验证不依赖训练产物的部分：
+
+```powershell
+npm run typecheck
+npm run build
+npm run test:contracts
+```

@@ -8,6 +8,22 @@ import {
 } from '../web-app/frontend/src/lib/modelPackage.ts'
 
 const trainingResultDirectory = path.resolve('pytorch-training', 'training_result')
+
+type VerificationCase = {
+  onnx: string
+  config?: string
+  preprocessor?: string
+  expected: {
+    family: 'ultralytics-yolo-detect' | 'ultralytics-rtdetr' | 'hf-detr-like'
+    webGpuSupported: boolean
+    webGpuIssueCode?: string
+    labels: Record<number, string>
+    labelSource: 'embedded-metadata' | 'sidecar-manifest'
+    inputs: Array<{ name: string; dimensions: Array<number | string> }>
+    outputs: Array<{ name: string; dimensions: Array<number | string> }>
+  }
+}
+
 const cases = [
   {
     onnx: 'yolov8n__himars_style_ultralytics.onnx',
@@ -65,7 +81,7 @@ const cases = [
       ],
     },
   },
-] as const
+] satisfies readonly VerificationCase[]
 
 const files = await collectOnnxFiles(trainingResultDirectory)
 if (files.length !== 4) {

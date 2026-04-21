@@ -1,0 +1,15 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {},
+	"extensions": {
+		"recommendations": [
+			"microsoft-aspire.aspire-vscode",
+			"TypeScriptTeam.native-preview",
+			"antfu.vite"
+		]
+	}
+}

@@ -13,6 +13,7 @@
     "start": "aspire run",
     "dev": "aspire run",
     "restore:aspire": "aspire restore",
+    "typecheck": "tsgo -p ./tsconfig.json --noEmit && npm run typecheck --workspace @4cimageseg/frontend && npm run typecheck --workspace @4cimageseg/contracts",
     "build": "npm run build --workspace @4cimageseg/contracts && npm run build --workspace @4cimageseg/frontend",
     "lint": "npm run lint --workspace @4cimageseg/frontend",
     "test:contracts": "npm run test --workspace @4cimageseg/contracts",
@@ -21,6 +22,7 @@
     "test": "npm run test:contracts && npm run test:frontend && npm run verify:training-models"
   },
   "devDependencies": {
+    "@typescript/native-preview": "7.0.0-dev.20260420.1",
     "tsx": "^4.21.0"
   }
 }
