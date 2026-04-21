@@ -19,5 +19,8 @@
     "test:frontend": "npm run test --workspace @4cimageseg/frontend",
     "verify:training-models": "node --experimental-strip-types ./scripts/verify-training-models.ts",
     "test": "npm run test:contracts && npm run test:frontend && npm run verify:training-models"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
   }
 }
