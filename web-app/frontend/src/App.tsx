@@ -1,4 +1,15 @@
-import { startTransition, useCallback, useEffect, useRef, useState } from 'react'
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type WheelEvent as ReactWheelEvent,
+} from 'react'
+import helpIcon from './assets/help-circle.svg?raw'
+import moonIcon from './assets/moon.svg?raw'
+import sunIcon from './assets/sun.svg?raw'
 import type { DetectionRun, ImportedModel, RunDetectionOptions } from './lib/onnxRuntime'
 import {
   drawSourceToCanvas,
@@ -20,6 +31,12 @@ import './App.css'
 
 type InputMode = 'image' | 'video' | 'camera'
 type StreamState = 'idle' | 'running' | 'stopping' | 'exporting'
+type SectionId = 'overview' | 'input-import' | 'inference-settings' | 'results-export'
+type PreviewZoomTarget = 'image' | 'video' | 'camera' | 'result-canvas'
+type PreviewViewerOffset = { x: number; y: number }
+type ThemeMode = 'light' | 'dark' | 'system'
+type ResolvedTheme = 'light' | 'dark'
+type StatusTone = 'neutral' | 'busy' | 'live'
 
 type DetectionItem = {
   label: string
@@ -35,6 +52,13 @@ type CameraDeviceOption = {
 const DEFAULT_DETECTION_THRESHOLD = 0.35
 const DEFAULT_MAX_DETECTIONS = 0
 const FPS_WINDOW_MS = 1000
+const PREVIEW_VIEWER_DEFAULT_SCALE = 1
+const PREVIEW_VIEWER_MIN_SCALE = 1
+const PREVIEW_VIEWER_MAX_SCALE = 4
+const PREVIEW_VIEWER_WHEEL_STEP = 0.2
+const PREVIEW_VIEWER_SCALE_PRESETS = [1, 1.25, 1.5, 2] as const
+const PREVIEW_VIEWER_DEFAULT_OFFSET: PreviewViewerOffset = { x: 0, y: 0 }
+const THEME_STORAGE_KEY = '4cimageseg-theme-mode'
 const THRESHOLD_COMMIT_KEYS = new Set([
   'ArrowLeft',
   'ArrowRight',
@@ -45,9 +69,50 @@ const THRESHOLD_COMMIT_KEYS = new Set([
   'PageUp',
   'PageDown',
 ])
+const NAV_ITEMS: ReadonlyArray<{ id: SectionId; label: string; description: string }> = [
+  { id: 'overview', label: '概览', description: '工作台入口与摘要' },
+  { id: 'input-import', label: '输入与导入', description: '输入源、模型与配置' },
+  { id: 'inference-settings', label: '推理设置', description: '阈值、数量与执行控制' },
+  { id: 'results-export', label: '结果与导出', description: '预览、结果与导出入口' },
+]
+
+const PROJECT_REPOSITORY_URL = 'https://code.gitlink.org.cn/phantomfancy/4CImageSeg'
+const PROJECT_LICENSE_URL = `${PROJECT_REPOSITORY_URL}/blob/master/LICENSE`
+const FOOTER_CONTACT_EMAIL = 'contact@4cimageseg.local'
+const FOOTER_FILING_NUMBER = '备案号待补充'
+const FOOTER_CERTIFICATION_INFO = '认证信息待补充'
+const FOOTER_COPYRIGHT_TEXT = `Copyright © ${new Date().getFullYear()} 4C-ai装备识别工具`
+const HELP_CONTENT: ReadonlyArray<{ title: string; body: string }> = [
+  {
+    title: '输入模式',
+    body: '图片模式适合单张检测，视频模式适合回放与导出，摄像头模式适合实时识别与现场观察。',
+  },
+  {
+    title: '模型与配置',
+    body: `先导入 ONNX 模型；如识别为 Hugging Face 风格模型，再补充 ${CONFIG_FILE_NAME}，必要时补充 ${PREPROCESSOR_CONFIG_FILE_NAME}。`,
+  },
+  {
+    title: '推理设置',
+    body: '推理阈值用于控制结果过滤强度，识别数量用于限制绘制数量；新值在提交后才会真正生效。',
+  },
+  {
+    title: '结果查看与导出',
+    body: '统一预览区会在原始输入和叠加结果之间切换，结果区会同步显示检测项列表，并提供图片或视频导出入口。',
+  },
+  {
+    title: '查看器操作',
+    body: '图像和结果查看器支持滚轮缩放、拖拽平移、双击切换；视频与摄像头预览则保留更接近标准播放器的操作方式。',
+  },
+]
 
 function App() {
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => readThemeMode())
+  const [systemTheme, setSystemTheme] = useState<ResolvedTheme>(() => getSystemTheme())
   const [inputMode, setInputMode] = useState<InputMode>('image')
+  const [activeSectionId, setActiveSectionId] = useState<SectionId>('overview')
+  const [isSidebarExpanded, setIsSidebarExpanded] = useState(false)
+  const [isThemeMenuOpen, setIsThemeMenuOpen] = useState(false)
+  const [isHelpOpen, setIsHelpOpen] = useState(false)
   const [imageFile, setImageFile] = useState<File | null>(null)
   const [imagePreviewUrl, setImagePreviewUrl] = useState('')
   const [videoFile, setVideoFile] = useState<File | null>(null)
@@ -78,15 +143,39 @@ function App() {
   const [pendingMaxDetectionsInput, setPendingMaxDetectionsInput] = useState(String(DEFAULT_MAX_DETECTIONS))
   const [appliedMaxDetections, setAppliedMaxDetections] = useState(DEFAULT_MAX_DETECTIONS)
   const [streamFps, setStreamFps] = useState<number | null>(null)
+  const [isPreviewZoomOpen, setIsPreviewZoomOpen] = useState(false)
+  const [previewViewerScale, setPreviewViewerScale] = useState(PREVIEW_VIEWER_DEFAULT_SCALE)
+  const [previewViewerOffset, setPreviewViewerOffset] = useState<PreviewViewerOffset>(PREVIEW_VIEWER_DEFAULT_OFFSET)
+  const [isPreviewViewerFullscreen, setIsPreviewViewerFullscreen] = useState(false)
 
+  const themeMenuRef = useRef<HTMLDivElement | null>(null)
   const sourceVideoRef = useRef<HTMLVideoElement | null>(null)
   const cameraVideoRef = useRef<HTMLVideoElement | null>(null)
   const resultCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const previewZoomDialogRef = useRef<HTMLDivElement | null>(null)
+  const previewZoomViewportRef = useRef<HTMLDivElement | null>(null)
+  const previewZoomMediaRef = useRef<HTMLDivElement | null>(null)
+  const previewZoomVideoRef = useRef<HTMLVideoElement | null>(null)
+  const previewZoomCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const workingCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const cameraStreamRef = useRef<MediaStream | null>(null)
   const frameLoopTokenRef = useRef(0)
   const frameInFlightRef = useRef(false)
   const frameTimestampsRef = useRef<number[]>([])
+  const previewPointerDragRef = useRef<{
+    originX: number
+    originY: number
+    pointerId: number
+  } | null>(null)
+
+  const resetPreviewViewer = useCallback(() => {
+    setIsPreviewZoomOpen(false)
+    setPreviewViewerScale(PREVIEW_VIEWER_DEFAULT_SCALE)
+    setPreviewViewerOffset(PREVIEW_VIEWER_DEFAULT_OFFSET)
+    setIsPreviewViewerFullscreen(false)
+    previewPointerDragRef.current = null
+  }, [])
+  const resolvedTheme = resolveThemeMode(themeMode, systemTheme)
 
   useEffect(() => () => {
     if (imagePreviewUrl) {
@@ -105,6 +194,39 @@ function App() {
       URL.revokeObjectURL(videoDownloadUrl)
     }
   }, [videoDownloadUrl])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+    const applyThemePreference = (nextMatches: boolean) => {
+      setSystemTheme(nextMatches ? 'dark' : 'light')
+    }
+
+    applyThemePreference(mediaQuery.matches)
+
+    const handleChange = (event: MediaQueryListEvent) => {
+      applyThemePreference(event.matches)
+    }
+
+    mediaQuery.addEventListener('change', handleChange)
+    return () => {
+      mediaQuery.removeEventListener('change', handleChange)
+    }
+  }, [])
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = resolvedTheme
+    document.documentElement.style.colorScheme = resolvedTheme
+    window.localStorage.setItem(THEME_STORAGE_KEY, themeMode)
+
+    return () => {
+      delete document.documentElement.dataset.theme
+      document.documentElement.style.colorScheme = ''
+    }
+  }, [resolvedTheme, themeMode])
 
   const supportsDirectoryPicker =
     typeof window !== 'undefined' &&
@@ -134,11 +256,47 @@ function App() {
   const displayedAppliedThreshold = appliedDetectionThreshold.toFixed(2)
   const displayedAppliedMaxDetections = String(appliedMaxDetections)
   const displayedFps = streamFps === null ? '-' : streamFps.toFixed(1)
+  const previewZoomScaleLabel = `${Math.round(previewViewerScale * 100)}%`
   const currentTimeLabel = inputMode === 'camera' && streamState === 'running'
     ? 'Live'
     : currentSourceTime === null
       ? '-'
       : `${currentSourceTime.toFixed(2)} s`
+  const availablePreviewZoomTarget = resolvePreviewZoomTarget({
+    hasRenderedResult,
+    imagePreviewUrl,
+    inputMode,
+    streamState,
+    videoPreviewUrl,
+  })
+  const previewZoomTarget = isPreviewZoomOpen ? availablePreviewZoomTarget : null
+  const canOpenPreviewZoom = availablePreviewZoomTarget !== null
+  const isScalablePreviewTarget =
+    previewZoomTarget !== null &&
+    isPreviewScalableTarget(previewZoomTarget)
+  const previewOpenLabel = availablePreviewZoomTarget === null
+    ? '打开预览'
+    : isPreviewScalableTarget(availablePreviewZoomTarget)
+      ? '打开查看器'
+      : '打开播放器'
+  const previewDialogTitle = getPreviewDialogTitle(previewZoomTarget)
+  const previewDialogHint = getPreviewDialogHint(previewZoomTarget)
+  const previewDialogTip = getPreviewDialogTip(previewZoomTarget)
+  const runStatus = getRunStatusLabel({
+    cameraBusy,
+    discoverBusy,
+    imageDetectBusy,
+    inputMode,
+    modelBusy,
+    streamState,
+  })
+  const currentThemeIcon = resolvedTheme === 'dark' ? moonIcon : sunIcon
+  const currentThemeLabel = themeMode === 'system'
+    ? `跟随系统 · ${resolvedTheme === 'dark' ? '深色' : '浅色'}`
+    : themeMode === 'dark'
+      ? '深色模式'
+      : '浅色模式'
+  const isAnyOverlayOpen = isPreviewZoomOpen || isHelpOpen
 
   const canRunImage =
     inputMode === 'image' &&
@@ -194,6 +352,7 @@ function App() {
   }
 
   function clearRecognitionOutputs() {
+    resetPreviewViewer()
     clearCanvas(resultCanvasRef.current)
     setHasRenderedResult(false)
     setDetectionItems([])
@@ -261,6 +420,7 @@ function App() {
   }
 
   const stopActiveStream = useCallback((statusText?: string) => {
+    resetPreviewViewer()
     frameLoopTokenRef.current += 1
     frameInFlightRef.current = false
 
@@ -287,7 +447,7 @@ function App() {
       }
     })
     frameTimestampsRef.current = []
-  }, [])
+  }, [resetPreviewViewer])
 
   const refreshCameraDevices = useCallback(async () => {
     if (!supportsCamera || typeof navigator.mediaDevices.enumerateDevices !== 'function') {
@@ -318,6 +478,213 @@ function App() {
   useEffect(() => () => {
     stopActiveStream()
   }, [stopActiveStream])
+
+  useEffect(() => {
+    if (!isPreviewZoomOpen && !isHelpOpen && !isThemeMenuOpen) {
+      return
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') {
+        return
+      }
+
+      if (isPreviewZoomOpen) {
+        if (document.fullscreenElement) {
+          void document.exitFullscreen().catch(() => {})
+        }
+
+        resetPreviewViewer()
+        return
+      }
+
+      if (isHelpOpen) {
+        setIsHelpOpen(false)
+        return
+      }
+
+      if (isThemeMenuOpen) {
+        setIsThemeMenuOpen(false)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isHelpOpen, isPreviewZoomOpen, isThemeMenuOpen, resetPreviewViewer])
+
+  useEffect(() => {
+    if (!isAnyOverlayOpen) {
+      return
+    }
+
+    const { body, documentElement } = document
+    const previousBodyOverflow = body.style.overflow
+    const previousBodyTouchAction = body.style.touchAction
+    const previousHtmlOverflow = documentElement.style.overflow
+    const previousHtmlOverscrollBehavior = documentElement.style.overscrollBehavior
+
+    body.style.overflow = 'hidden'
+    body.style.touchAction = 'none'
+    documentElement.style.overflow = 'hidden'
+    documentElement.style.overscrollBehavior = 'none'
+
+    return () => {
+      body.style.overflow = previousBodyOverflow
+      body.style.touchAction = previousBodyTouchAction
+      documentElement.style.overflow = previousHtmlOverflow
+      documentElement.style.overscrollBehavior = previousHtmlOverscrollBehavior
+    }
+  }, [isAnyOverlayOpen])
+
+  useEffect(() => {
+    if (!isThemeMenuOpen) {
+      return
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (themeMenuRef.current?.contains(event.target as Node)) {
+        return
+      }
+
+      setIsThemeMenuOpen(false)
+    }
+
+    window.addEventListener('pointerdown', handlePointerDown)
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown)
+    }
+  }, [isThemeMenuOpen])
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsPreviewViewerFullscreen(Boolean(document.fullscreenElement))
+    }
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange)
+    handleFullscreenChange()
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!isPreviewZoomOpen || previewZoomTarget !== 'result-canvas') {
+      return
+    }
+
+    if (!resultCanvasRef.current) {
+      return
+    }
+
+    syncCanvas(resultCanvasRef.current, previewZoomCanvasRef.current)
+  }, [isPreviewZoomOpen, previewZoomTarget, detectionItems, hasRenderedResult, streamFps])
+
+  useEffect(() => {
+    if (!isPreviewZoomOpen || !isScalablePreviewTarget) {
+      return
+    }
+
+    setPreviewViewerOffset((currentValue) =>
+      clampPreviewViewerOffset(
+        currentValue,
+        previewViewerScale,
+        previewZoomViewportRef.current,
+        previewZoomMediaRef.current,
+      ))
+  }, [isPreviewZoomOpen, isScalablePreviewTarget, previewViewerScale, previewZoomTarget])
+
+  useEffect(() => {
+    if (!isPreviewZoomOpen || !previewZoomTarget || previewZoomTarget === 'image' || previewZoomTarget === 'result-canvas') {
+      return
+    }
+
+    const modalVideo = previewZoomVideoRef.current
+    if (!modalVideo) {
+      return
+    }
+
+    modalVideo.playsInline = true
+    modalVideo.muted = true
+
+    if (previewZoomTarget === 'video') {
+      modalVideo.srcObject = null
+      modalVideo.src = videoPreviewUrl
+      if (sourceVideoRef.current) {
+        modalVideo.currentTime = sourceVideoRef.current.currentTime
+      }
+      if (sourceVideoRef.current && !sourceVideoRef.current.paused) {
+        void modalVideo.play().catch(() => {})
+      }
+    } else if (previewZoomTarget === 'camera') {
+      modalVideo.removeAttribute('src')
+      modalVideo.srcObject = cameraStreamRef.current
+      void modalVideo.play().catch(() => {})
+    }
+
+    return () => {
+      modalVideo.pause()
+      modalVideo.srcObject = null
+      modalVideo.removeAttribute('src')
+      modalVideo.load()
+    }
+  }, [isPreviewZoomOpen, previewZoomTarget, streamState, videoPreviewUrl])
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof IntersectionObserver === 'undefined') {
+      return
+    }
+
+    const sections = NAV_ITEMS
+      .map((item) => document.getElementById(item.id))
+      .filter((section): section is HTMLElement => section instanceof HTMLElement)
+
+    if (sections.length === 0) {
+      return
+    }
+
+    const visibleSections = new Map<SectionId, number>()
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          const sectionId = entry.target.id as SectionId
+          if (entry.isIntersecting) {
+            visibleSections.set(sectionId, entry.intersectionRatio)
+            return
+          }
+
+          visibleSections.delete(sectionId)
+        })
+
+        const nextActiveSection = NAV_ITEMS
+          .map((item, index) => ({
+            id: item.id,
+            index,
+            ratio: visibleSections.get(item.id) ?? -1,
+          }))
+          .filter((item) => item.ratio >= 0)
+          .sort((left, right) => right.ratio - left.ratio || left.index - right.index)[0]
+
+        if (nextActiveSection) {
+          setActiveSectionId((currentValue) =>
+            currentValue === nextActiveSection.id ? currentValue : nextActiveSection.id)
+        }
+      },
+      {
+        rootMargin: '-18% 0px -54% 0px',
+        threshold: [0.12, 0.3, 0.48, 0.72],
+      },
+    )
+
+    sections.forEach((section) => {
+      observer.observe(section)
+    })
+
+    return () => {
+      observer.disconnect()
+    }
+  }, [])
 
   async function handleOnnxSelection(file: File | null) {
     let shouldResetNativeInput = false
@@ -366,6 +733,142 @@ function App() {
         setOnnxInputKey((value) => value + 1)
       }
     }
+  }
+
+  function handleNavigate(sectionId: SectionId) {
+    const section = document.getElementById(sectionId)
+    if (!section) {
+      return
+    }
+
+    setIsThemeMenuOpen(false)
+    setActiveSectionId(sectionId)
+    section.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    })
+  }
+
+  function openPreviewZoom() {
+    if (!availablePreviewZoomTarget) {
+      return
+    }
+
+    setIsThemeMenuOpen(false)
+    setIsHelpOpen(false)
+    setPreviewViewerScale(PREVIEW_VIEWER_DEFAULT_SCALE)
+    setPreviewViewerOffset(PREVIEW_VIEWER_DEFAULT_OFFSET)
+    setIsPreviewZoomOpen(true)
+  }
+
+  function closePreviewZoom() {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => {})
+    }
+
+    resetPreviewViewer()
+  }
+
+  function setPreviewViewerScaleValue(nextScale: number) {
+    const normalizedScale = clampPreviewZoomScale(nextScale)
+    setPreviewViewerScale(normalizedScale)
+
+    if (normalizedScale <= PREVIEW_VIEWER_DEFAULT_SCALE) {
+      setPreviewViewerOffset(PREVIEW_VIEWER_DEFAULT_OFFSET)
+      return
+    }
+
+    setPreviewViewerOffset((currentValue) =>
+      clampPreviewViewerOffset(
+        currentValue,
+        normalizedScale,
+        previewZoomViewportRef.current,
+        previewZoomMediaRef.current,
+      ))
+  }
+
+  function handlePreviewWheel(event: ReactWheelEvent<HTMLDivElement>) {
+    if (!isScalablePreviewTarget) {
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    const direction = event.deltaY < 0 ? 1 : -1
+    setPreviewViewerScaleValue(previewViewerScale + direction * PREVIEW_VIEWER_WHEEL_STEP)
+  }
+
+  function handlePreviewPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!isScalablePreviewTarget || previewViewerScale <= PREVIEW_VIEWER_DEFAULT_SCALE) {
+      return
+    }
+
+    previewPointerDragRef.current = {
+      originX: event.clientX - previewViewerOffset.x,
+      originY: event.clientY - previewViewerOffset.y,
+      pointerId: event.pointerId,
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  function handlePreviewPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!isScalablePreviewTarget) {
+      return
+    }
+
+    const dragState = previewPointerDragRef.current
+    if (!dragState || dragState.pointerId !== event.pointerId) {
+      return
+    }
+
+    setPreviewViewerOffset(
+      clampPreviewViewerOffset(
+        {
+          x: event.clientX - dragState.originX,
+          y: event.clientY - dragState.originY,
+        },
+        previewViewerScale,
+        previewZoomViewportRef.current,
+        previewZoomMediaRef.current,
+      ))
+  }
+
+  function handlePreviewPointerRelease(event: ReactPointerEvent<HTMLDivElement>) {
+    const dragState = previewPointerDragRef.current
+    if (!dragState || dragState.pointerId !== event.pointerId) {
+      return
+    }
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+
+    previewPointerDragRef.current = null
+  }
+
+  function handlePreviewMediaDoubleClick() {
+    if (!isScalablePreviewTarget) {
+      return
+    }
+
+    setPreviewViewerScaleValue(
+      previewViewerScale > PREVIEW_VIEWER_DEFAULT_SCALE
+        ? PREVIEW_VIEWER_DEFAULT_SCALE
+        : 2)
+  }
+
+  async function togglePreviewViewerFullscreen() {
+    const dialogElement = previewZoomDialogRef.current
+    if (!dialogElement) {
+      return
+    }
+
+    if (document.fullscreenElement) {
+      await document.exitFullscreen().catch(() => {})
+      return
+    }
+
+    await dialogElement.requestFullscreen?.().catch(() => {})
   }
 
   async function handleConfigSelection(file: File | null) {
@@ -838,6 +1341,10 @@ function App() {
   ) {
     syncCanvas(detectionRun.annotatedCanvas, resultCanvasRef.current)
     drawRuntimeOverlay(resultCanvasRef.current, fps)
+    if (isPreviewZoomOpen && previewZoomTarget === 'result-canvas') {
+      syncCanvas(detectionRun.annotatedCanvas, previewZoomCanvasRef.current)
+      drawRuntimeOverlay(previewZoomCanvasRef.current, fps)
+    }
     if (exportCanvas) {
       syncCanvas(detectionRun.annotatedCanvas, exportCanvas)
       drawRuntimeOverlay(exportCanvas, fps)
@@ -854,488 +1361,874 @@ function App() {
   }
 
   return (
-    <main className="shell">
-      <section className="hero">
-        <div className="hero__eyebrow">4C-ai装备识别工具</div>
-        <h1>React 19 + TypeScript 的本地 ONNX 工作台</h1>
-        <p className="hero__copy">
-          当前版本支持图片、本地视频与摄像头三种输入来源，模型导入、推理编排、结果解码与结果导出全部在浏览器端完成。
-        </p>
-      </section>
+    <div className="app-shell">
+      <aside className={`sidebar${isSidebarExpanded ? ' sidebar--expanded' : ''}`}>
+        <button
+          type="button"
+          className="sidebar__toggle"
+          aria-expanded={isSidebarExpanded}
+          aria-controls="workspace-navigation"
+          aria-label={isSidebarExpanded ? '收起侧栏导航' : '展开侧栏导航'}
+          onClick={() => {
+            setIsSidebarExpanded((currentValue) => !currentValue)
+          }}
+        >
+          <span className="sidebar__toggle-icon" aria-hidden="true">
+            {isSidebarExpanded ? '×' : '≡'}
+          </span>
+          <span className="sidebar__toggle-text">{isSidebarExpanded ? '收起' : '导航'}</span>
+        </button>
 
-      <section className="grid">
-        <div className="panel-stack">
-          <article className="panel panel--input">
-            <header className="panel__header">
-              <h2>输入与导入</h2>
-              <p>选择输入模式后，再导入 ONNX 模型与可选的 Hugging Face 配置文件。</p>
-            </header>
-
-            <div className="mode-switch">
-              {(['image', 'video', 'camera'] as const).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  className={`mode-switch__button${inputMode === mode ? ' mode-switch__button--active' : ''}`}
-                  disabled={streamState !== 'idle'}
-                  onClick={() => {
-                    stopActiveStream()
-                    clearRecognitionOutputs()
-                    setInputMode(mode)
-                    if (mode === 'camera') {
-                      void refreshCameraDevices()
-                    }
-                    setStatusMessage(
-                      mode === 'image'
-                        ? '已切换到图片识别模式。'
-                        : mode === 'video'
-                          ? '已切换到本地视频识别模式。'
-                          : '已切换到摄像头识别模式。',
-                    )
-                  }}
-                >
-                  {mode === 'image' ? '图片' : mode === 'video' ? '视频' : '摄像头'}
-                </button>
-              ))}
-            </div>
-
-            {inputMode === 'image' ? (
-              <label className="field">
-                <span className="field__label">图片文件</span>
-                <input
-                  type="file"
-                  accept="image/*"
-                  disabled={streamState !== 'idle'}
-                  onChange={(event) => {
-                    updateImageFile(event.target.files?.[0] ?? null)
-                  }}
-                />
-                <span className="field__hint">{imageFile?.name ?? '未选择图片。'}</span>
-              </label>
-            ) : null}
-
-            {inputMode === 'video' ? (
-              <label className="field">
-                <span className="field__label">视频文件</span>
-                <input
-                  type="file"
-                  accept="video/*"
-                  disabled={streamState !== 'idle'}
-                  onChange={(event) => {
-                    updateVideoFile(event.target.files?.[0] ?? null)
-                  }}
-                />
-                <span className="field__hint">{videoFile?.name ?? '未选择视频。'}</span>
-              </label>
-            ) : null}
-
-            {inputMode === 'camera' ? (
-              <label className="field">
-                <span className="field__label">摄像头设备</span>
-                <select
-                  className="field__select"
-                  value={selectedCameraId}
-                  disabled={cameraBusy || streamState !== 'idle' || cameraDevices.length === 0}
-                  onChange={(event) => {
-                    setSelectedCameraId(event.target.value)
-                  }}
-                >
-                  {cameraDevices.length === 0 ? (
-                    <option value="">未发现可用摄像头</option>
-                  ) : (
-                    cameraDevices.map((item) => (
-                      <option key={item.deviceId} value={item.deviceId}>
-                        {item.label}
-                      </option>
-                    ))
-                  )}
-                </select>
-                <span className="field__hint">
-                  {supportsCamera
-                    ? (cameraDevices.length === 0 ? '首次授权前可能无法显示设备标签。' : '选择需要用于实时识别的摄像头。')
-                    : '当前浏览器不支持摄像头访问。'}
-                </span>
-              </label>
-            ) : null}
-
-            <label className="field">
-              <span className="field__label">ONNX 模型</span>
-              <input
-                key={onnxInputKey}
-                type="file"
-                accept=".onnx"
-                disabled={modelBusy || streamState !== 'idle'}
-                onChange={(event) => {
-                  void handleOnnxSelection(event.target.files?.[0] ?? null)
+        <div className="sidebar__panel" aria-hidden={!isSidebarExpanded}>
+          <nav
+            id="workspace-navigation"
+            className="sidebar__nav"
+            aria-label="工作台区块导航"
+          >
+            {NAV_ITEMS.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={`sidebar__nav-item${activeSectionId === item.id ? ' sidebar__nav-item--active' : ''}`}
+                aria-current={activeSectionId === item.id ? 'location' : undefined}
+                onClick={() => {
+                  handleNavigate(item.id)
                 }}
-              />
-              <span className="field__hint">
-                {onnxModelDraft?.fileName ?? '仅允许导入 .onnx 文件。'}
-              </span>
-            </label>
+              >
+                <span className="sidebar__nav-label">{item.label}</span>
+              </button>
+            ))}
+          </nav>
+        </div>
+      </aside>
 
-            <label className="field">
-              <span className="field__label">{CONFIG_FILE_NAME} {importControls.configRequired ? '(必选)' : '(未启用)'}</span>
-              <input
-                key={configInputKey}
-                type="file"
-                accept=".json,application/json"
-                disabled={!importControls.configEnabled || modelBusy || streamState !== 'idle'}
-                onChange={(event) => {
-                  void handleConfigSelection(event.target.files?.[0] ?? null)
+      <div className="page-layout">
+        <header className="topbar">
+          <div className="topbar__brand">
+            <div className="topbar__title">4C-ai装备识别工具</div>
+          </div>
+
+          <div className="topbar__summary" aria-label="当前工作状态摘要">
+            <span className="topbar__meta-item">
+              <span className="topbar__meta-label">模式</span>
+              <span className="topbar__meta-value">{getInputModeLabel(inputMode)}</span>
+            </span>
+            <span className="topbar__meta-item">
+              <span className="topbar__meta-label">状态</span>
+              <span className={`topbar__meta-value topbar__value--${runStatus.tone}`}>{runStatus.label}</span>
+            </span>
+            <span className="topbar__meta-item">
+              <span className="topbar__meta-label">Runtime</span>
+              <span className="topbar__meta-value">{displayedProvider}</span>
+            </span>
+          </div>
+
+          <div className="topbar__action-list">
+            <div className="topbar__menu-anchor" ref={themeMenuRef}>
+              <button
+                type="button"
+                className="topbar__action-button"
+                aria-haspopup="menu"
+                aria-expanded={isThemeMenuOpen}
+                aria-label={`主题切换，当前为${currentThemeLabel}`}
+                title={`主题切换，当前为${currentThemeLabel}`}
+                onClick={() => {
+                  setIsThemeMenuOpen((currentValue) => !currentValue)
                 }}
-              />
-              <span className="field__hint">
-                {configFile?.name ?? (
-                  importControls.configEnabled
-                    ? `仅允许导入 ${CONFIG_FILE_NAME}。`
-                    : '请先导入 ONNX，并识别为 Hugging Face 风格模型。'
-                )}
-              </span>
-            </label>
+              >
+                <SvgIcon markup={currentThemeIcon} />
+                <span>主题</span>
+              </button>
 
-            <label className="field">
-              <span className="field__label">{PREPROCESSOR_CONFIG_FILE_NAME} {importControls.preprocessorEnabled ? '(可选)' : '(未启用)'}</span>
-              <input
-                key={preprocessorInputKey}
-                type="file"
-                accept=".json,application/json"
-                disabled={!importControls.preprocessorEnabled || modelBusy || streamState !== 'idle'}
-                onChange={(event) => {
-                  void handlePreprocessorSelection(event.target.files?.[0] ?? null)
-                }}
-              />
-              <span className="field__hint">
-                {preprocessorConfigFile?.name ?? (
-                  importControls.preprocessorEnabled
-                    ? `仅允许导入 ${PREPROCESSOR_CONFIG_FILE_NAME}。`
-                    : '当前模型不需要该配置文件。'
-                )}
-              </span>
-            </label>
-
-            {onnxModelDraft?.family === 'hf-detr-like' ? (
-              <div className="actions actions--stacked">
-                <button
-                  type="button"
-                  className="action action--secondary"
-                  disabled={!importControls.autoDiscoverEnabled || modelBusy || discoverBusy || streamState !== 'idle'}
-                  onClick={() => void handleAutoDiscoverSidecars()}
-                >
-                  {discoverBusy ? '查找中...' : '自动查找同目录配置'}
-                </button>
-                {!supportsDirectoryPicker ? (
-                  <span className="field__hint">当前浏览器不支持目录授权，请手动导入 JSON 配置文件。</span>
-                ) : null}
-              </div>
-            ) : null}
-
-            <div className="status-box">
-              <div className="status-box__title">状态</div>
-              <p>{statusMessage}</p>
-              {displayedRuntimeMessage ? <p>{displayedRuntimeMessage}</p> : null}
-            </div>
-          </article>
-
-          <article className="panel panel--settings">
-            <header className="panel__header">
-              <h2>推理设置</h2>
-              <p>在启动识别前统一设置阈值、识别数量和导出相关操作。</p>
-            </header>
-
-            <label className="field">
-              <span className="field__label">推理阈值</span>
-              <div className="threshold-control">
-                <input
-                  className="threshold-control__slider"
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  value={pendingDetectionThreshold}
-                  disabled={!canAdjustInferenceSettings}
-                  onChange={(event) => {
-                    setPendingDetectionThreshold(clampDetectionThreshold(Number(event.target.value)))
-                  }}
-                  onPointerUp={(event) => {
-                    commitDetectionThreshold(Number(event.currentTarget.value))
-                  }}
-                  onKeyUp={(event) => {
-                    if (THRESHOLD_COMMIT_KEYS.has(event.key)) {
-                      commitDetectionThreshold(Number(event.currentTarget.value))
-                    }
-                  }}
-                  onBlur={(event) => {
-                    commitDetectionThreshold(Number(event.currentTarget.value))
-                  }}
-                />
-                <span className="threshold-control__value">{displayedPendingThreshold}</span>
-              </div>
-              <span className="field__hint">
-                {importedModel
-                  ? `当前值 ${displayedPendingThreshold}，已生效 ${displayedAppliedThreshold}。拖动过程中不会立即重跑推理，松开后新阈值才会生效。`
-                  : '导入模型后可调整推理阈值。'}
-              </span>
-            </label>
-
-            <label className="field">
-              <span className="field__label">识别数量</span>
-              <div className="count-control">
-                <input
-                  className="count-control__input"
-                  type="number"
-                  min="0"
-                  step="1"
-                  inputMode="numeric"
-                  value={pendingMaxDetectionsInput}
-                  disabled={!canAdjustInferenceSettings}
-                  onChange={(event) => {
-                    setPendingMaxDetectionsInput(event.target.value)
-                  }}
-                  onBlur={(event) => {
-                    commitMaxDetections(event.currentTarget.value)
-                  }}
-                />
-                <span className="count-control__value">{displayedAppliedMaxDetections}</span>
-              </div>
-              <span className="field__hint">
-                {importedModel
-                  ? `输入 0 代表全部识别并绘制；当前输入 ${pendingMaxDetectionsInput || '0'}，已生效 ${displayedAppliedMaxDetections}。失焦或开始推理时才会提交新值。`
-                  : '导入模型后可设置识别数量上限，0 代表全部识别并绘制。'}
-              </span>
-            </label>
-
-            <div className="actions actions--stacked">
-              {inputMode === 'image' ? (
-                <>
-                  <button
-                    type="button"
-                    className="action action--primary"
-                    disabled={!canRunImage}
-                    onClick={() => void handleRunImageDetection()}
-                  >
-                    {imageDetectBusy ? '识别中...' : '执行图片识别'}
-                  </button>
-                  <button
-                    type="button"
-                    className="action action--secondary"
-                    disabled={!canExportImage}
-                    onClick={() => void handleExportImage()}
-                  >
-                    导出结果图像
-                  </button>
-                </>
-              ) : null}
-
-              {inputMode === 'video' ? (
-                <>
-                  <button
-                    type="button"
-                    className="action action--primary"
-                    disabled={!canStartVideo}
-                    onClick={() => void handleStartVideoDetection()}
-                  >
-                    开始实时识别
-                  </button>
-                  <button
-                    type="button"
-                    className="action action--secondary"
-                    disabled={!canStopVideo}
-                    onClick={() => stopActiveStream('已停止视频实时识别。')}
-                  >
-                    停止实时识别
-                  </button>
-                  <button
-                    type="button"
-                    className="action action--secondary"
-                    disabled={!canExportVideo}
-                    onClick={() => void handleExportVideo()}
-                  >
-                    {streamState === 'exporting' ? '导出中...' : '导出结果视频'}
-                  </button>
-                  {videoDownloadUrl ? (
-                    <a
-                      className="download-link"
-                      href={videoDownloadUrl}
-                      download={buildVideoExportFileName(videoFile?.name ?? 'result')}
+              {isThemeMenuOpen ? (
+                <div className="topbar__menu" role="menu" aria-label="主题切换">
+                  {([
+                    ['dark', '深色'],
+                    ['light', '浅色'],
+                    ['system', '跟随系统'],
+                  ] as const).map(([mode, label]) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={themeMode === mode}
+                      className={`topbar__menu-item${themeMode === mode ? ' topbar__menu-item--active' : ''}`}
+                      onClick={() => {
+                        setThemeMode(mode)
+                        setIsThemeMenuOpen(false)
+                      }}
                     >
-                      下载结果 WebM
-                    </a>
-                  ) : null}
-                  {!supportsVideoExport ? (
-                    <span className="field__hint">当前浏览器不支持 `MediaRecorder WebM` 导出。</span>
-                  ) : null}
-                </>
-              ) : null}
-
-              {inputMode === 'camera' ? (
-                <>
-                  <button
-                    type="button"
-                    className="action action--primary"
-                    disabled={!canStartCamera}
-                    onClick={() => void handleStartCameraDetection()}
-                  >
-                    {cameraBusy ? '启动中...' : '开始实时识别'}
-                  </button>
-                  <button
-                    type="button"
-                    className="action action--secondary"
-                    disabled={!canStopCamera}
-                    onClick={() => stopActiveStream('已停止摄像头实时识别。')}
-                  >
-                    停止实时识别
-                  </button>
-                </>
+                      <span>{label}</span>
+                      {themeMode === mode ? <span className="topbar__menu-check">当前</span> : null}
+                    </button>
+                  ))}
+                </div>
               ) : null}
             </div>
-          </article>
+
+            <button
+              type="button"
+              className="topbar__action-button"
+              aria-label="帮助说明"
+              title="帮助说明"
+              onClick={() => {
+                setIsThemeMenuOpen(false)
+                setIsHelpOpen(true)
+              }}
+            >
+              <SvgIcon markup={helpIcon} />
+              <span>帮助</span>
+            </button>
+          </div>
+        </header>
+
+        <div className="surface">
+          <main className="shell">
+          <section className="hero" id="overview" data-nav-section>
+            <div className="hero__eyebrow">4C-ai装备识别工具</div>
+            <h1>React 19 + TypeScript 的本地 ONNX 工作台</h1>
+            <p className="hero__copy">
+              当前版本支持图片、本地视频与摄像头三种输入来源，模型导入、推理编排、结果解码与结果导出全部在浏览器端完成。
+            </p>
+          </section>
+
+          <section className="grid">
+            <div className="panel-stack">
+              <article className="panel panel--input" id="input-import" data-nav-section>
+                <header className="panel__header">
+                  <h2>输入与导入</h2>
+                  <p>选择输入模式后，再导入 ONNX 模型与可选的 Hugging Face 配置文件。</p>
+                </header>
+
+                <div className="mode-switch">
+                  {(['image', 'video', 'camera'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className={`mode-switch__button${inputMode === mode ? ' mode-switch__button--active' : ''}`}
+                      disabled={streamState !== 'idle'}
+                      onClick={() => {
+                        stopActiveStream()
+                        clearRecognitionOutputs()
+                        setInputMode(mode)
+                        if (mode === 'camera') {
+                          void refreshCameraDevices()
+                        }
+                        setStatusMessage(
+                          mode === 'image'
+                            ? '已切换到图片识别模式。'
+                            : mode === 'video'
+                              ? '已切换到本地视频识别模式。'
+                              : '已切换到摄像头识别模式。',
+                        )
+                      }}
+                    >
+                      {mode === 'image' ? '图片' : mode === 'video' ? '视频' : '摄像头'}
+                    </button>
+                  ))}
+                </div>
+
+                {inputMode === 'image' ? (
+                  <label className="field">
+                    <span className="field__label">图片文件</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      disabled={streamState !== 'idle'}
+                      onChange={(event) => {
+                        updateImageFile(event.target.files?.[0] ?? null)
+                      }}
+                    />
+                    <span className="field__hint">{imageFile?.name ?? '未选择图片。'}</span>
+                  </label>
+                ) : null}
+
+                {inputMode === 'video' ? (
+                  <label className="field">
+                    <span className="field__label">视频文件</span>
+                    <input
+                      type="file"
+                      accept="video/*"
+                      disabled={streamState !== 'idle'}
+                      onChange={(event) => {
+                        updateVideoFile(event.target.files?.[0] ?? null)
+                      }}
+                    />
+                    <span className="field__hint">{videoFile?.name ?? '未选择视频。'}</span>
+                  </label>
+                ) : null}
+
+                {inputMode === 'camera' ? (
+                  <label className="field">
+                    <span className="field__label">摄像头设备</span>
+                    <select
+                      className="field__select"
+                      value={selectedCameraId}
+                      disabled={cameraBusy || streamState !== 'idle' || cameraDevices.length === 0}
+                      onChange={(event) => {
+                        setSelectedCameraId(event.target.value)
+                      }}
+                    >
+                      {cameraDevices.length === 0 ? (
+                        <option value="">未发现可用摄像头</option>
+                      ) : (
+                        cameraDevices.map((item) => (
+                          <option key={item.deviceId} value={item.deviceId}>
+                            {item.label}
+                          </option>
+                        ))
+                      )}
+                    </select>
+                    <span className="field__hint">
+                      {supportsCamera
+                        ? (cameraDevices.length === 0 ? '首次授权前可能无法显示设备标签。' : '选择需要用于实时识别的摄像头。')
+                        : '当前浏览器不支持摄像头访问。'}
+                    </span>
+                  </label>
+                ) : null}
+
+                <label className="field">
+                  <span className="field__label">ONNX 模型</span>
+                  <input
+                    key={onnxInputKey}
+                    type="file"
+                    accept=".onnx"
+                    disabled={modelBusy || streamState !== 'idle'}
+                    onChange={(event) => {
+                      void handleOnnxSelection(event.target.files?.[0] ?? null)
+                    }}
+                  />
+                  <span className="field__hint">
+                    {onnxModelDraft?.fileName ?? '仅允许导入 .onnx 文件。'}
+                  </span>
+                </label>
+
+                <label className="field">
+                  <span className="field__label">{CONFIG_FILE_NAME} {importControls.configRequired ? '(必选)' : '(未启用)'}</span>
+                  <input
+                    key={configInputKey}
+                    type="file"
+                    accept=".json,application/json"
+                    disabled={!importControls.configEnabled || modelBusy || streamState !== 'idle'}
+                    onChange={(event) => {
+                      void handleConfigSelection(event.target.files?.[0] ?? null)
+                    }}
+                  />
+                  <span className="field__hint">
+                    {configFile?.name ?? (
+                      importControls.configEnabled
+                        ? `仅允许导入 ${CONFIG_FILE_NAME}。`
+                        : '请先导入 ONNX，并识别为 Hugging Face 风格模型。'
+                    )}
+                  </span>
+                </label>
+
+                <label className="field">
+                  <span className="field__label">{PREPROCESSOR_CONFIG_FILE_NAME} {importControls.preprocessorEnabled ? '(可选)' : '(未启用)'}</span>
+                  <input
+                    key={preprocessorInputKey}
+                    type="file"
+                    accept=".json,application/json"
+                    disabled={!importControls.preprocessorEnabled || modelBusy || streamState !== 'idle'}
+                    onChange={(event) => {
+                      void handlePreprocessorSelection(event.target.files?.[0] ?? null)
+                    }}
+                  />
+                  <span className="field__hint">
+                    {preprocessorConfigFile?.name ?? (
+                      importControls.preprocessorEnabled
+                        ? `仅允许导入 ${PREPROCESSOR_CONFIG_FILE_NAME}。`
+                        : '当前模型不需要该配置文件。'
+                    )}
+                  </span>
+                </label>
+
+                {onnxModelDraft?.family === 'hf-detr-like' ? (
+                  <div className="actions actions--stacked">
+                    <button
+                      type="button"
+                      className="action action--secondary"
+                      disabled={!importControls.autoDiscoverEnabled || modelBusy || discoverBusy || streamState !== 'idle'}
+                      onClick={() => void handleAutoDiscoverSidecars()}
+                    >
+                      {discoverBusy ? '查找中...' : '自动查找同目录配置'}
+                    </button>
+                    {!supportsDirectoryPicker ? (
+                      <span className="field__hint">当前浏览器不支持目录授权，请手动导入 JSON 配置文件。</span>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                <div className="status-box">
+                  <div className="status-box__title">状态</div>
+                  <p>{statusMessage}</p>
+                  {displayedRuntimeMessage ? <p>{displayedRuntimeMessage}</p> : null}
+                </div>
+              </article>
+
+              <article className="panel panel--settings" id="inference-settings" data-nav-section>
+                <header className="panel__header">
+                  <h2>推理设置</h2>
+                  <p>在启动识别前统一设置阈值、识别数量和导出相关操作。</p>
+                </header>
+
+                <label className="field">
+                  <span className="field__label">推理阈值</span>
+                  <div className="threshold-control">
+                    <input
+                      className="threshold-control__slider"
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.01"
+                      value={pendingDetectionThreshold}
+                      disabled={!canAdjustInferenceSettings}
+                      onChange={(event) => {
+                        setPendingDetectionThreshold(clampDetectionThreshold(Number(event.target.value)))
+                      }}
+                      onPointerUp={(event) => {
+                        commitDetectionThreshold(Number(event.currentTarget.value))
+                      }}
+                      onKeyUp={(event) => {
+                        if (THRESHOLD_COMMIT_KEYS.has(event.key)) {
+                          commitDetectionThreshold(Number(event.currentTarget.value))
+                        }
+                      }}
+                      onBlur={(event) => {
+                        commitDetectionThreshold(Number(event.currentTarget.value))
+                      }}
+                    />
+                    <span className="threshold-control__value">{displayedPendingThreshold}</span>
+                  </div>
+                  <span className="field__hint">
+                    {importedModel
+                      ? `当前值 ${displayedPendingThreshold}，已生效 ${displayedAppliedThreshold}。拖动过程中不会立即重跑推理，松开后新阈值才会生效。`
+                      : '导入模型后可调整推理阈值。'}
+                  </span>
+                </label>
+
+                <label className="field">
+                  <span className="field__label">识别数量</span>
+                  <div className="count-control">
+                    <input
+                      className="count-control__input"
+                      type="number"
+                      min="0"
+                      step="1"
+                      inputMode="numeric"
+                      value={pendingMaxDetectionsInput}
+                      disabled={!canAdjustInferenceSettings}
+                      onChange={(event) => {
+                        setPendingMaxDetectionsInput(event.target.value)
+                      }}
+                      onBlur={(event) => {
+                        commitMaxDetections(event.currentTarget.value)
+                      }}
+                    />
+                    <span className="count-control__value">{displayedAppliedMaxDetections}</span>
+                  </div>
+                  <span className="field__hint">
+                    {importedModel
+                      ? `输入 0 代表全部识别并绘制；当前输入 ${pendingMaxDetectionsInput || '0'}，已生效 ${displayedAppliedMaxDetections}。失焦或开始推理时才会提交新值。`
+                      : '导入模型后可设置识别数量上限，0 代表全部识别并绘制。'}
+                  </span>
+                </label>
+
+                <div className="actions actions--stacked">
+                  {inputMode === 'image' ? (
+                    <>
+                      <button
+                        type="button"
+                        className="action action--primary"
+                        disabled={!canRunImage}
+                        onClick={() => void handleRunImageDetection()}
+                      >
+                        {imageDetectBusy ? '识别中...' : '执行图片识别'}
+                      </button>
+                      <button
+                        type="button"
+                        className="action action--secondary"
+                        disabled={!canExportImage}
+                        onClick={() => void handleExportImage()}
+                      >
+                        导出结果图像
+                      </button>
+                    </>
+                  ) : null}
+
+                  {inputMode === 'video' ? (
+                    <>
+                      <button
+                        type="button"
+                        className="action action--primary"
+                        disabled={!canStartVideo}
+                        onClick={() => void handleStartVideoDetection()}
+                      >
+                        开始实时识别
+                      </button>
+                      <button
+                        type="button"
+                        className="action action--secondary"
+                        disabled={!canStopVideo}
+                        onClick={() => stopActiveStream('已停止视频实时识别。')}
+                      >
+                        停止实时识别
+                      </button>
+                      <button
+                        type="button"
+                        className="action action--secondary"
+                        disabled={!canExportVideo}
+                        onClick={() => void handleExportVideo()}
+                      >
+                        {streamState === 'exporting' ? '导出中...' : '导出结果视频'}
+                      </button>
+                      {videoDownloadUrl ? (
+                        <a
+                          className="download-link"
+                          href={videoDownloadUrl}
+                          download={buildVideoExportFileName(videoFile?.name ?? 'result')}
+                        >
+                          下载结果 WebM
+                        </a>
+                      ) : null}
+                      {!supportsVideoExport ? (
+                        <span className="field__hint">当前浏览器不支持 `MediaRecorder WebM` 导出。</span>
+                      ) : null}
+                    </>
+                  ) : null}
+
+                  {inputMode === 'camera' ? (
+                    <>
+                      <button
+                        type="button"
+                        className="action action--primary"
+                        disabled={!canStartCamera}
+                        onClick={() => void handleStartCameraDetection()}
+                      >
+                        {cameraBusy ? '启动中...' : '开始实时识别'}
+                      </button>
+                      <button
+                        type="button"
+                        className="action action--secondary"
+                        disabled={!canStopCamera}
+                        onClick={() => stopActiveStream('已停止摄像头实时识别。')}
+                      >
+                        停止实时识别
+                      </button>
+                    </>
+                  ) : null}
+                </div>
+              </article>
+            </div>
+
+            <article className="panel panel--contract">
+              <header className="panel__header">
+                <h2>模型契约</h2>
+                <p>导入后先根据输入输出签名解析 family、预处理和解码规则。</p>
+              </header>
+
+              {displayedContract ? (
+                <div className="contract">
+                  <div className="metric-grid">
+                    <Metric label="Display Name" value={displayedContract.displayName} />
+                    <Metric label="Family" value={displayedContract.family} />
+                    <Metric label="Provider" value={displayedProvider} />
+                    <Metric label="Label Source" value={displayedContract.labelSource} />
+                    <Metric label="Sidecars" value={displayedSidecars} />
+                    <Metric label="Input Tensor" value={displayedContract.preprocess.inputTensorName} />
+                    <Metric
+                      label="Image Size"
+                      value={`${displayedContract.preprocess.imageWidth} x ${displayedContract.preprocess.imageHeight}`}
+                    />
+                  </div>
+
+                  <SignatureTable title="Inputs" items={displayedContract.inputs.map((item) => ({
+                    name: item.name,
+                    dims: formatDims(item.dimensions),
+                  }))} />
+
+                  <SignatureTable title="Outputs" items={displayedContract.outputs.map((item) => ({
+                    name: item.name,
+                    dims: formatDims(item.dimensions),
+                  }))} />
+
+                  <div className="warnings">
+                    <div className="warnings__title">Warnings</div>
+                    {displayedContract.warnings.length === 0 ? (
+                      <p>当前模型未发现额外警告。</p>
+                    ) : (
+                      displayedContract.warnings.map((item) => (
+                        <p key={item}>{item}</p>
+                      ))
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <EmptyState text={modelBusy ? '正在建立会话并解析模型签名...' : '尚未导入模型。'} />
+              )}
+            </article>
+          </section>
+
+          <section className="grid grid--results" id="results-export" data-nav-section>
+            <article className="panel panel--preview">
+              <header className="panel__header">
+                <h2>统一预览</h2>
+                <p>识别前显示输入源，识别后在同一区域显示结果叠加画面。</p>
+              </header>
+
+              <div className="preview-card preview-stage">
+                <div className="preview-card__title">当前画面</div>
+                <div className="preview-stage__media">
+                  {canOpenPreviewZoom ? (
+                    <button
+                      type="button"
+                      className="preview-stage__zoom-button"
+                      aria-label={previewOpenLabel}
+                      title={previewOpenLabel}
+                      onClick={() => {
+                        openPreviewZoom()
+                      }}
+                    >
+                      <span className="preview-stage__zoom-icon" aria-hidden="true">+</span>
+                    </button>
+                  ) : null}
+
+                  {inputMode === 'image' ? (
+                    imagePreviewUrl ? (
+                      <img
+                        className={`preview-stage__image${hasRenderedResult ? ' preview-stage__visual--hidden' : ''}`}
+                        src={imagePreviewUrl}
+                        alt="输入图片"
+                      />
+                    ) : (
+                      <EmptyState text="未选择图片。" />
+                    )
+                  ) : null}
+
+                  {inputMode === 'video' ? (
+                    videoPreviewUrl ? (
+                      <video
+                        ref={sourceVideoRef}
+                        className={`preview-stage__video${hasRenderedResult ? ' preview-stage__visual--hidden' : ''}`}
+                        src={videoPreviewUrl}
+                        controls
+                        playsInline
+                        muted
+                      />
+                    ) : (
+                      <EmptyState text="未选择视频。" />
+                    )
+                  ) : null}
+
+                  {inputMode === 'camera' ? (
+                    <>
+                      <video
+                        ref={cameraVideoRef}
+                        className={`preview-stage__video${streamState === 'running' && !hasRenderedResult ? '' : ' preview-stage__visual--hidden'}`}
+                        autoPlay
+                        muted
+                        playsInline
+                      />
+                      {streamState !== 'running' ? <EmptyState text="尚未启动摄像头。" /> : null}
+                    </>
+                  ) : null}
+
+                  <canvas
+                    ref={resultCanvasRef}
+                    className={`preview-stage__canvas${hasRenderedResult ? '' : ' preview-stage__visual--hidden'}`}
+                  />
+                </div>
+              </div>
+            </article>
+
+            <article className="panel panel--detections">
+              <header className="panel__header">
+                <h2>检测结果</h2>
+                <p>输出来自 `Contracts` 约束的统一检测结构。</p>
+              </header>
+
+              <div className="metric-grid metric-grid--compact">
+                <Metric label="Runtime" value={resultProvider || '-'} />
+                <Metric label="Source Mode" value={inputMode} />
+                <Metric label="Detection Count" value={String(detectionItems.length)} />
+                <Metric label="Current Time" value={currentTimeLabel} />
+                <Metric label="FPS" value={displayedFps} />
+              </div>
+
+              {detectionItems.length === 0 ? (
+                <EmptyState text={
+                  inputMode === 'image'
+                    ? (imageDetectBusy ? '正在等待图片识别结果...' : '当前没有可展示的检测项。')
+                    : (streamState === 'running' || streamState === 'exporting')
+                      ? '正在等待当前帧的推理结果...'
+                      : '当前没有可展示的检测项。'
+                } />
+              ) : (
+                <div className="result-list">
+                  {detectionItems.map((item, index) => (
+                    <div className="result-row" key={`${item.label}-${index}`}>
+                      <div>
+                        <div className="result-row__label">{item.label}</div>
+                        <div className="result-row__box">{item.boxSummary}</div>
+                      </div>
+                      <div className="result-row__score">{(item.confidence * 100).toFixed(1)}%</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+          </section>
+          </main>
         </div>
 
-        <article className="panel panel--contract">
-          <header className="panel__header">
-            <h2>模型契约</h2>
-            <p>导入后先根据输入输出签名解析 family、预处理和解码规则。</p>
-          </header>
-
-          {displayedContract ? (
-            <div className="contract">
-              <div className="metric-grid">
-                <Metric label="Display Name" value={displayedContract.displayName} />
-                <Metric label="Family" value={displayedContract.family} />
-                <Metric label="Provider" value={displayedProvider} />
-                <Metric label="Label Source" value={displayedContract.labelSource} />
-                <Metric label="Sidecars" value={displayedSidecars} />
-                <Metric label="Input Tensor" value={displayedContract.preprocess.inputTensorName} />
-                <Metric
-                  label="Image Size"
-                  value={`${displayedContract.preprocess.imageWidth} x ${displayedContract.preprocess.imageHeight}`}
-                />
-              </div>
-
-              <SignatureTable title="Inputs" items={displayedContract.inputs.map((item) => ({
-                name: item.name,
-                dims: formatDims(item.dimensions),
-              }))} />
-
-              <SignatureTable title="Outputs" items={displayedContract.outputs.map((item) => ({
-                name: item.name,
-                dims: formatDims(item.dimensions),
-              }))} />
-
-              <div className="warnings">
-                <div className="warnings__title">Warnings</div>
-                {displayedContract.warnings.length === 0 ? (
-                  <p>当前模型未发现额外警告。</p>
-                ) : (
-                  displayedContract.warnings.map((item) => (
-                    <p key={item}>{item}</p>
-                  ))
-                )}
-              </div>
-            </div>
-          ) : (
-            <EmptyState text={modelBusy ? '正在建立会话并解析模型签名...' : '尚未导入模型。'} />
-          )}
-        </article>
-      </section>
-
-      <section className="grid grid--results">
-        <article className="panel panel--preview">
-          <header className="panel__header">
-            <h2>统一预览</h2>
-            <p>识别前显示输入源，识别后在同一区域显示结果叠加画面。</p>
-          </header>
-
-          <div className="preview-card preview-stage">
-            <div className="preview-card__title">当前画面</div>
-            <div className="preview-stage__media">
-              {inputMode === 'image' ? (
-                imagePreviewUrl ? (
-                  <img
-                    className={`preview-stage__image${hasRenderedResult ? ' preview-stage__visual--hidden' : ''}`}
-                    src={imagePreviewUrl}
-                    alt="输入图片"
-                  />
-                ) : (
-                  <EmptyState text="未选择图片。" />
-                )
-              ) : null}
-
-              {inputMode === 'video' ? (
-                videoPreviewUrl ? (
-                  <video
-                    ref={sourceVideoRef}
-                    className={`preview-stage__video${hasRenderedResult ? ' preview-stage__visual--hidden' : ''}`}
-                    src={videoPreviewUrl}
-                    controls
-                    playsInline
-                    muted
-                  />
-                ) : (
-                  <EmptyState text="未选择视频。" />
-                )
-              ) : null}
-
-              {inputMode === 'camera' ? (
-                <>
-                  <video
-                    ref={cameraVideoRef}
-                    className={`preview-stage__video${streamState === 'running' && !hasRenderedResult ? '' : ' preview-stage__visual--hidden'}`}
-                    autoPlay
-                    muted
-                    playsInline
-                  />
-                  {streamState !== 'running' ? <EmptyState text="尚未启动摄像头。" /> : null}
-                </>
-              ) : null}
-
-              <canvas
-                ref={resultCanvasRef}
-                className={`preview-stage__canvas${hasRenderedResult ? '' : ' preview-stage__visual--hidden'}`}
-              />
-            </div>
-          </div>
-        </article>
-
-        <article className="panel panel--detections">
-          <header className="panel__header">
-            <h2>检测结果</h2>
-            <p>输出来自 `Contracts` 约束的统一检测结构。</p>
-          </header>
-
-          <div className="metric-grid metric-grid--compact">
-            <Metric label="Runtime" value={resultProvider || '-'} />
-            <Metric label="Source Mode" value={inputMode} />
-            <Metric label="Detection Count" value={String(detectionItems.length)} />
-            <Metric label="Current Time" value={currentTimeLabel} />
-            <Metric label="FPS" value={displayedFps} />
+        <footer className="footer">
+          <div className="footer__section footer__section--brand">
+            <div className="footer__title">4C-ai装备识别工具</div>
+            <p className="footer__copy">{FOOTER_COPYRIGHT_TEXT}</p>
+            <p className="footer__copy">项目源码依据 AGPL-3.0 许可进行分发与修改。</p>
           </div>
 
-          {detectionItems.length === 0 ? (
-            <EmptyState text={
-              inputMode === 'image'
-                ? (imageDetectBusy ? '正在等待图片识别结果...' : '当前没有可展示的检测项。')
-                : (streamState === 'running' || streamState === 'exporting')
-                  ? '正在等待当前帧的推理结果...'
-                  : '当前没有可展示的检测项。'
-            } />
-          ) : (
-            <div className="result-list">
-              {detectionItems.map((item, index) => (
-                <div className="result-row" key={`${item.label}-${index}`}>
-                  <div>
-                    <div className="result-row__label">{item.label}</div>
-                    <div className="result-row__box">{item.boxSummary}</div>
-                  </div>
-                  <div className="result-row__score">{(item.confidence * 100).toFixed(1)}%</div>
-                </div>
+          <div className="footer__section">
+            <div className="footer__heading">联系方式</div>
+            <a className="footer__link" href={`mailto:${FOOTER_CONTACT_EMAIL}`}>
+              {FOOTER_CONTACT_EMAIL}
+            </a>
+          </div>
+
+          <div className="footer__section">
+            <div className="footer__heading">备案与认证</div>
+            <div className="footer__meta-list">
+              <div className="footer__meta-item">
+                <span className="footer__label">备案信息</span>
+                <span className="footer__value">{FOOTER_FILING_NUMBER}</span>
+              </div>
+              <div className="footer__meta-item">
+                <span className="footer__label">认证信息</span>
+                <span className="footer__value">{FOOTER_CERTIFICATION_INFO}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="footer__section">
+            <div className="footer__heading">项目链接</div>
+            <div className="footer__link-list">
+              <a
+                className="footer__link"
+                href={PROJECT_LICENSE_URL}
+                target="_blank"
+                rel="noreferrer"
+              >
+                项目 LICENSE
+              </a>
+              <a
+                className="footer__link"
+                href={PROJECT_REPOSITORY_URL}
+                target="_blank"
+                rel="noreferrer"
+              >
+                项目仓库
+              </a>
+            </div>
+          </div>
+        </footer>
+      </div>
+
+      {isHelpOpen ? (
+        <div className="help-modal" role="dialog" aria-modal="true" aria-label="帮助说明">
+          <button
+            type="button"
+            className="help-modal__backdrop"
+            aria-label="关闭帮助说明"
+            onClick={() => {
+              setIsHelpOpen(false)
+            }}
+          />
+
+          <div className="help-modal__dialog">
+            <div className="help-modal__header">
+              <div>
+                <div className="help-modal__eyebrow">帮助</div>
+                <h2 className="help-modal__title">工作台使用说明</h2>
+                <p className="help-modal__copy">
+                  这里整理了当前前端工作台最常用的导入、推理、查看与导出说明。
+                </p>
+              </div>
+
+              <button
+                type="button"
+                className="help-modal__close"
+                onClick={() => {
+                  setIsHelpOpen(false)
+                }}
+              >
+                关闭
+              </button>
+            </div>
+
+            <div className="help-modal__grid">
+              {HELP_CONTENT.map((item) => (
+                <section className="help-modal__card" key={item.title}>
+                  <h3>{item.title}</h3>
+                  <p>{item.body}</p>
+                </section>
               ))}
             </div>
-          )}
-        </article>
-      </section>
-    </main>
+          </div>
+        </div>
+      ) : null}
+
+      {isPreviewZoomOpen && previewZoomTarget ? (
+        <div className="preview-zoom" role="dialog" aria-modal="true" aria-label="放大预览">
+          <button
+            type="button"
+            className="preview-zoom__backdrop"
+            aria-label="关闭放大预览"
+            onClick={() => {
+              closePreviewZoom()
+            }}
+          />
+
+          <div className="preview-zoom__dialog" ref={previewZoomDialogRef}>
+            <div className="preview-zoom__header">
+              <div className="preview-zoom__summary">
+                <div className="preview-zoom__summary-top">
+                  <span className="preview-zoom__badge">
+                    {isScalablePreviewTarget ? '图像查看器' : '媒体播放器'}
+                  </span>
+                  {isScalablePreviewTarget ? (
+                    <span className="preview-zoom__scale">{previewZoomScaleLabel}</span>
+                  ) : null}
+                </div>
+                <h3 className="preview-zoom__title">{previewDialogTitle}</h3>
+                <p className="preview-zoom__hint">{previewDialogHint}</p>
+                <div className="preview-zoom__meta">
+                  <span className="preview-zoom__meta-item">模式 {inputMode}</span>
+                  <span className="preview-zoom__meta-item">Runtime {resultProvider || '-'}</span>
+                  <span className="preview-zoom__meta-item">时间 {currentTimeLabel}</span>
+                  {isScalablePreviewTarget ? (
+                    <span className="preview-zoom__meta-item">检测项 {detectionItems.length}</span>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="preview-zoom__toolbar">
+                <div className="preview-zoom__toolbar-group">
+                  {isScalablePreviewTarget
+                    ? PREVIEW_VIEWER_SCALE_PRESETS.map((scalePreset) => (
+                      <button
+                        key={scalePreset}
+                        type="button"
+                        className={`preview-zoom__action${
+                          Math.abs(previewViewerScale - scalePreset) < 0.01
+                            ? ' preview-zoom__action--active'
+                            : ''
+                        }`}
+                        onClick={() => {
+                          setPreviewViewerScaleValue(scalePreset)
+                        }}
+                      >
+                        {scalePreset === 1 ? '适合窗口' : `${Math.round(scalePreset * 100)}%`}
+                      </button>
+                    ))
+                    : null}
+                  {isScalablePreviewTarget ? (
+                    <button
+                      type="button"
+                      className="preview-zoom__action"
+                      onClick={() => {
+                        setPreviewViewerScaleValue(PREVIEW_VIEWER_DEFAULT_SCALE)
+                        setPreviewViewerOffset(PREVIEW_VIEWER_DEFAULT_OFFSET)
+                      }}
+                    >
+                      重置视图
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="preview-zoom__action"
+                    onClick={() => {
+                      void togglePreviewViewerFullscreen()
+                    }}
+                  >
+                    {isPreviewViewerFullscreen ? '退出全屏' : '全屏'}
+                  </button>
+                  <button
+                    type="button"
+                    className="preview-zoom__action preview-zoom__action--close"
+                    onClick={() => {
+                      closePreviewZoom()
+                    }}
+                  >
+                    关闭
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div
+              ref={previewZoomViewportRef}
+              className={`preview-zoom__viewport${
+                isScalablePreviewTarget ? ' preview-zoom__viewport--interactive' : ''
+              }`}
+              onWheel={isScalablePreviewTarget ? handlePreviewWheel : undefined}
+            >
+              <div
+                ref={previewZoomMediaRef}
+                className={`preview-zoom__media-wrapper${
+                  isScalablePreviewTarget && previewViewerScale > PREVIEW_VIEWER_DEFAULT_SCALE
+                    ? ' preview-zoom__media-wrapper--draggable'
+                    : ''
+                }`}
+                style={isScalablePreviewTarget
+                  ? {
+                    transform: `translate(${previewViewerOffset.x}px, ${previewViewerOffset.y}px) scale(${previewViewerScale})`,
+                  }
+                  : undefined}
+                onDoubleClick={isScalablePreviewTarget ? handlePreviewMediaDoubleClick : undefined}
+                onPointerCancel={isScalablePreviewTarget ? handlePreviewPointerRelease : undefined}
+                onPointerDown={isScalablePreviewTarget ? handlePreviewPointerDown : undefined}
+                onPointerMove={isScalablePreviewTarget ? handlePreviewPointerMove : undefined}
+                onPointerUp={isScalablePreviewTarget ? handlePreviewPointerRelease : undefined}
+              >
+                {previewZoomTarget === 'image' ? (
+                  <img className="preview-zoom__image" src={imagePreviewUrl} alt="放大预览图片" />
+                ) : null}
+
+                {previewZoomTarget === 'video' || previewZoomTarget === 'camera' ? (
+                  <video
+                    ref={previewZoomVideoRef}
+                    className="preview-zoom__video"
+                    autoPlay={previewZoomTarget === 'camera'}
+                    controls={previewZoomTarget === 'video'}
+                    muted
+                    playsInline
+                  />
+                ) : null}
+
+                {previewZoomTarget === 'result-canvas' ? (
+                  <canvas ref={previewZoomCanvasRef} className="preview-zoom__canvas" />
+                ) : null}
+              </div>
+            </div>
+
+            <div className="preview-zoom__footer">
+              <span className="preview-zoom__footer-item">{previewDialogTip}</span>
+              <span className="preview-zoom__footer-item">Esc 可直接关闭当前预览</span>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function SvgIcon(props: { markup: string }) {
+  return (
+    <span
+      className="svg-icon"
+      aria-hidden="true"
+      dangerouslySetInnerHTML={{ __html: props.markup }}
+    />
   )
 }
 
@@ -1540,6 +2433,177 @@ function normalizeMaxDetectionsValue(value: number | string): number {
   }
 
   return Math.max(0, Math.trunc(parsedValue))
+}
+
+function resolvePreviewZoomTarget(input: {
+  hasRenderedResult: boolean
+  imagePreviewUrl: string
+  inputMode: InputMode
+  streamState: StreamState
+  videoPreviewUrl: string
+}): PreviewZoomTarget | null {
+  if (input.hasRenderedResult) {
+    return 'result-canvas'
+  }
+
+  if (input.inputMode === 'image' && input.imagePreviewUrl) {
+    return 'image'
+  }
+
+  if (input.inputMode === 'video' && input.videoPreviewUrl) {
+    return 'video'
+  }
+
+  if (input.inputMode === 'camera' && input.streamState === 'running') {
+    return 'camera'
+  }
+
+  return null
+}
+
+function readThemeMode(): ThemeMode {
+  if (typeof window === 'undefined') {
+    return 'system'
+  }
+
+  const storedValue = window.localStorage.getItem(THEME_STORAGE_KEY)
+  return storedValue === 'light' || storedValue === 'dark' || storedValue === 'system'
+    ? storedValue
+    : 'system'
+}
+
+function getSystemTheme(): ResolvedTheme {
+  if (typeof window === 'undefined') {
+    return 'light'
+  }
+
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+function resolveThemeMode(
+  themeMode: ThemeMode,
+  systemTheme: ResolvedTheme,
+): ResolvedTheme {
+  return themeMode === 'system' ? systemTheme : themeMode
+}
+
+function getInputModeLabel(inputMode: InputMode): string {
+  return inputMode === 'image' ? '图片' : inputMode === 'video' ? '视频' : '摄像头'
+}
+
+function getRunStatusLabel(input: {
+  cameraBusy: boolean
+  discoverBusy: boolean
+  imageDetectBusy: boolean
+  inputMode: InputMode
+  modelBusy: boolean
+  streamState: StreamState
+}): { label: string; tone: StatusTone } {
+  if (input.modelBusy) {
+    return { label: '模型解析中', tone: 'busy' }
+  }
+
+  if (input.discoverBusy) {
+    return { label: '配置查找中', tone: 'busy' }
+  }
+
+  if (input.cameraBusy) {
+    return { label: '摄像头启动中', tone: 'busy' }
+  }
+
+  if (input.imageDetectBusy) {
+    return { label: '图片识别中', tone: 'busy' }
+  }
+
+  if (input.streamState === 'exporting') {
+    return { label: '结果导出中', tone: 'busy' }
+  }
+
+  if (input.streamState === 'running') {
+    return {
+      label: input.inputMode === 'camera' ? '实时识别中' : '流式识别中',
+      tone: 'live',
+    }
+  }
+
+  if (input.streamState === 'stopping') {
+    return { label: '停止中', tone: 'busy' }
+  }
+
+  return { label: '待命', tone: 'neutral' }
+}
+
+function getPreviewDialogTitle(target: PreviewZoomTarget | null): string {
+  switch (target) {
+    case 'image':
+      return '图像查看器'
+    case 'result-canvas':
+      return '检测结果查看器'
+    case 'video':
+      return '视频播放器'
+    case 'camera':
+      return '实时画面播放器'
+    default:
+      return '预览'
+  }
+}
+
+function getPreviewDialogHint(target: PreviewZoomTarget | null): string {
+  switch (target) {
+    case 'image':
+      return '用于查看原始输入图片，适合快速检查细节和构图。'
+    case 'result-canvas':
+      return '用于检查推理后的叠加结果，便于核对框选位置与标签。'
+    case 'video':
+      return '保留原生视频控件，可直接拖动时间轴、暂停和全屏。'
+    case 'camera':
+      return '实时显示当前摄像头流，适合放大观察现场画面。'
+    default:
+      return '当前预览内容可在此处集中查看。'
+  }
+}
+
+function getPreviewDialogTip(target: PreviewZoomTarget | null): string {
+  switch (target) {
+    case 'image':
+    case 'result-canvas':
+      return '滚轮缩放，拖拽平移，双击可在适合窗口和 200% 之间切换。'
+    case 'video':
+      return '使用原生控件操作播放与定位，上方按钮负责容器级全屏。'
+    case 'camera':
+      return '摄像头实时画面不做伪缩放，建议直接使用全屏查看。'
+    default:
+      return '可通过上方按钮切换查看方式。'
+  }
+}
+
+function isPreviewScalableTarget(target: PreviewZoomTarget): boolean {
+  return target === 'image' || target === 'result-canvas'
+}
+
+function clampPreviewZoomScale(value: number): number {
+  return Math.min(Math.max(value, PREVIEW_VIEWER_MIN_SCALE), PREVIEW_VIEWER_MAX_SCALE)
+}
+
+function clampPreviewViewerOffset(
+  value: PreviewViewerOffset,
+  scale: number,
+  viewport: HTMLDivElement | null,
+  media: HTMLDivElement | null,
+): PreviewViewerOffset {
+  if (!viewport || !media || scale <= PREVIEW_VIEWER_DEFAULT_SCALE) {
+    return PREVIEW_VIEWER_DEFAULT_OFFSET
+  }
+
+  const scaledWidth = media.offsetWidth * scale
+  const scaledHeight = media.offsetHeight * scale
+  const maxOffsetX = Math.max(0, (scaledWidth - viewport.clientWidth) / 2)
+  const maxOffsetY = Math.max(0, (scaledHeight - viewport.clientHeight) / 2)
+
+  return {
+    x: Math.min(Math.max(value.x, -maxOffsetX), maxOffsetX),
+    y: Math.min(Math.max(value.y, -maxOffsetY), maxOffsetY),
+  }
 }
 
 async function ensureVideoReady(videoElement: HTMLVideoElement): Promise<void> {
