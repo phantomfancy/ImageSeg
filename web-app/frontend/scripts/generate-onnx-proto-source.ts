@@ -1,10 +1,10 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import path from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const scriptDirectory = fileURLToPath(new URL('.', import.meta.url))
-const frontendDirectory = path.resolve(scriptDirectory, '..')
-const sourcePath = path.join(
+const scriptDirectory = dirname(fileURLToPath(import.meta.url))
+const frontendDirectory = resolve(scriptDirectory, '..')
+const sourcePath = join(
   frontendDirectory,
   'node_modules',
   'onnxruntime-web',
@@ -14,10 +14,10 @@ const sourcePath = path.join(
   'protobuf',
   'onnx.js',
 )
-const outputPath = path.join(frontendDirectory, 'src', 'lib', 'onnxProtoSource.generated.ts')
+const outputPath = join(frontendDirectory, 'src', 'lib', 'onnxProtoSource.generated.ts')
 
 const source = await readFile(sourcePath, 'utf8')
-await mkdir(path.dirname(outputPath), { recursive: true })
+await mkdir(dirname(outputPath), { recursive: true })
 await writeFile(
   outputPath,
   `const onnxProtoSource = ${JSON.stringify(source)} as const\n\nexport default onnxProtoSource\n`,

@@ -4,11 +4,11 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "prepare:ort": "node ./scripts/generate-onnx-proto-source.mjs && node ./scripts/copy-ort-assets.mjs",
+    "prepare:ort": "node --experimental-strip-types ./scripts/generate-onnx-proto-source.ts && node --experimental-strip-types ./scripts/copy-ort-assets.ts",
     "dev": "npm run prepare:ort && vite --configLoader native",
     "build": "npm run prepare:ort && tsgo -b && vite build --configLoader native",
     "typecheck": "tsgo -b --pretty false",
-    "lint": "eslint .",
+    "lint": "node --experimental-strip-types ./node_modules/eslint/bin/eslint.js --flag unstable_native_nodejs_ts_config --config eslint.config.ts .",
     "test:model-package": "node --experimental-strip-types ./scripts/test-model-package.ts",
     "test": "npm run prepare:ort && npm run lint && npm run typecheck && npm run test:model-package",
     "preview": "vite preview"
