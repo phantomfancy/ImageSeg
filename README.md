@@ -129,3 +129,26 @@ npm run typecheck
 npm run build
 npm run test:contracts
 ```
+
+## WebGPU 下 fp16 模型兼容处理
+
+部分 `hf-detr-like` 的 `fp16` ONNX 模型在 `onnxruntime-web + WebGPU` 下可能出现 `Cast(13)` 与 `tensor(int64)` 相关报错，典型错误如下：
+
+```text
+Failed to find kernel for Cast(13) ... the node in the model has the following type (tensor(int64))
+```
+
+该问题可参考 ONNX Runtime 官方 issue：
+
+- [microsoft/onnxruntime#25125](https://github.com/microsoft/onnxruntime/issues/25125)
+
+当前已验证可用的处理方式如下：
+
+1. 使用`pytorch_training`中`remove_back_to_back_cast.py`脚本, 来源于 [remove_back_to_back_cast.py](https://github.com/guschmue/ort-web-perf/blob/master/remove_back_to_back_cast.py)
+2. 使用脚本转换原始模型，例如：
+
+```powershell
+python .\remove_back_to_back_cast.py .\rtdetrv2_original_style_hugginface\model_fp16.onnx .\rtdetrv2_original_style_hugginface\model_fp16_encoded.onnx
+```
+
+3. 在 Web App 中导入转换后的 `model_fp16_encoded.onnx` 进行推理
