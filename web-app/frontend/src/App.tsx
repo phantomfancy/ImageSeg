@@ -12,10 +12,9 @@ import moonIcon from './assets/moon.svg?raw'
 import sunIcon from './assets/sun.svg?raw'
 import type { DetectionRun, ImportedModel, RunDetectionOptions } from './lib/onnxRuntime'
 import {
-  drawSourceToCanvas,
   getWebGpuSupportState,
   inspectImportedModel,
-  runDetectionOnCanvas,
+  runDetectionOnSource,
   runSingleImageDetection,
 } from './lib/onnxRuntime'
 import { deriveModelImportControls } from './lib/modelImportState'
@@ -157,7 +156,6 @@ function App() {
   const previewZoomMediaRef = useRef<HTMLDivElement | null>(null)
   const previewZoomVideoRef = useRef<HTMLVideoElement | null>(null)
   const previewZoomCanvasRef = useRef<HTMLCanvasElement | null>(null)
-  const workingCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const cameraStreamRef = useRef<MediaStream | null>(null)
   const frameLoopTokenRef = useRef(0)
   const frameInFlightRef = useRef(false)
@@ -1290,13 +1288,12 @@ function App() {
 
         frameInFlightRef.current = true
         try {
-          const sourceCanvas = drawSourceToCanvas(videoElement, workingCanvasRef.current ?? undefined)
-          workingCanvasRef.current = sourceCanvas
-          const detectionRun = await runDetectionOnCanvas(
+          const detectionRun = await runDetectionOnSource(
             importedModel,
-            sourceCanvas,
+            videoElement,
             buildFrameSourceLabel(sourceKind, videoElement.currentTime, videoFile?.name, selectedCameraId, cameraDevices),
             detectionOptions,
+            resultCanvasRef.current ?? undefined,
           )
           if (frameLoopTokenRef.current !== token) {
             resolve()
@@ -2359,6 +2356,10 @@ function clearCanvas(canvas: HTMLCanvasElement | null) {
 
 function syncCanvas(source: HTMLCanvasElement, target: HTMLCanvasElement | null) {
   if (!target) {
+    return
+  }
+
+  if (source === target) {
     return
   }
 

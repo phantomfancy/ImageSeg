@@ -26,10 +26,20 @@ if (ort.env.webgpu) {
 }
 
 const WEBGPU_UNSUPPORTED_MESSAGE = '当前浏览器不支持 WebGPU，无法执行识别。'
+const GPU_BUFFER_USAGE_COPY_DST = 0x0008
+const GPU_BUFFER_USAGE_STORAGE = 0x0080
 
 type SessionState = {
   session: ort.InferenceSession
   providerName: 'webgpu'
+  inputName: string
+  outputNames: readonly string[]
+  preprocessCanvas: HTMLCanvasElement
+  preprocessContext: CanvasRenderingContext2D
+  inputData: Float32Array
+  inputTensor: ort.Tensor
+  inputGpuBuffer: GPUBuffer | null
+  gpuDevice: GPUDevice | null
 }
 
 const sessionCache = new Map<string, Promise<SessionState>>()
@@ -104,7 +114,7 @@ export async function runSingleImageDetection(
   options?: RunDetectionOptions,
 ): Promise<DetectionRun> {
   const sourceCanvas = await loadImageCanvas(imageFile)
-  return runDetectionOnCanvas(model, sourceCanvas, imageFile.name, options)
+  return runDetectionOnSource(model, sourceCanvas, imageFile.name, options)
 }
 
 export async function runDetectionOnCanvas(
@@ -112,13 +122,26 @@ export async function runDetectionOnCanvas(
   sourceCanvas: HTMLCanvasElement,
   inputSource: string,
   options?: RunDetectionOptions,
+  targetCanvas?: HTMLCanvasElement,
 ): Promise<DetectionRun> {
-  const sessionState = await getSessionState(model.key, model.bytes)
+  return runDetectionOnSource(model, sourceCanvas, inputSource, options, targetCanvas)
+}
+
+export async function runDetectionOnSource(
+  model: ImportedModel,
+  source: CanvasImageSource,
+  inputSource: string,
+  options?: RunDetectionOptions,
+  targetCanvas?: HTMLCanvasElement,
+): Promise<DetectionRun> {
+  const sessionState = await getSessionState(model)
   const detectionContract = createDetectionContract(model.contract, options)
-  const preparedInput = createPreparedInput(sourceCanvas, detectionContract)
+  const annotatedCanvas = captureSourceFrame(source, targetCanvas)
+  const preparedInput = prepareInput(sessionState, source, detectionContract)
+  const fetchNames = resolveRequestedOutputNames(sessionState.outputNames, detectionContract.decoder.outputTensorNames)
   const outputMap = await sessionState.session.run({
-    [detectionContract.preprocess.inputTensorName]: preparedInput.tensor,
-  })
+    [sessionState.inputName]: preparedInput.tensor,
+  }, fetchNames)
   const normalizedOutputs = await normalizeOutputs(outputMap)
   const detections = decodeDetections(
     detectionContract,
@@ -126,9 +149,11 @@ export async function runDetectionOnCanvas(
     preparedInput.geometry,
   )
 
+  drawDetections(annotatedCanvas, detections)
+
   return {
     providerName: sessionState.providerName,
-    annotatedCanvas: drawDetections(sourceCanvas, detections),
+    annotatedCanvas,
     recognitionResult: {
       inputSource,
       modelVersion: model.fileName,
@@ -141,30 +166,186 @@ export async function runDetectionOnCanvas(
   }
 }
 
-async function getSessionState(key: string, bytes: Uint8Array): Promise<SessionState> {
+async function getSessionState(model: ImportedModel): Promise<SessionState> {
   assertWebGpuSupported()
-  const existing = sessionCache.get(key)
+  const existing = sessionCache.get(model.key)
   if (existing) {
     return existing
   }
 
-  const promise = createWebGpuSession(bytes).catch((error: unknown) => {
-    sessionCache.delete(key)
+  const promise = createSessionState(model).catch((error: unknown) => {
+    sessionCache.delete(model.key)
     throw error
   })
 
-  sessionCache.set(key, promise)
+  sessionCache.set(model.key, promise)
   return promise
 }
 
-async function createWebGpuSession(bytes: Uint8Array): Promise<SessionState> {
-  const session = await ort.InferenceSession.create(bytes, {
-    executionProviders: ['webgpu'],
+async function createSessionState(model: ImportedModel): Promise<SessionState> {
+  const inputWidth = model.contract.preprocess.imageWidth
+  const inputHeight = model.contract.preprocess.imageHeight
+  const inputData = new Float32Array(3 * inputWidth * inputHeight)
+  const inputDims = [1, 3, inputHeight, inputWidth] as const
+  const preprocessCanvas = document.createElement('canvas')
+  preprocessCanvas.width = inputWidth
+  preprocessCanvas.height = inputHeight
+  const preprocessContext = get2dContext(preprocessCanvas, { willReadFrequently: true })
+  const gpuDevice = await ort.env.webgpu.device
+
+  let graphSession: ort.InferenceSession | null = null
+  try {
+    graphSession = await createWebGpuSession(model.bytes, gpuDevice, true)
+    const inputName = resolveInputName(graphSession.inputNames, model.contract.preprocess.inputTensorName)
+    const inputGpuBuffer = createInputGpuBuffer(gpuDevice, inputData.byteLength)
+
+    return {
+      session: graphSession,
+      providerName: 'webgpu',
+      inputName,
+      outputNames: graphSession.outputNames,
+      preprocessCanvas,
+      preprocessContext,
+      inputData,
+      inputTensor: ort.Tensor.fromGpuBuffer(inputGpuBuffer, {
+        dataType: 'float32',
+        dims: inputDims,
+      }),
+      inputGpuBuffer,
+      gpuDevice,
+    }
+  } catch {
+    await safelyReleaseSession(graphSession)
+    const fallbackSession = await createWebGpuSession(model.bytes, gpuDevice, false)
+
+    return {
+      session: fallbackSession,
+      providerName: 'webgpu',
+      inputName: resolveInputName(fallbackSession.inputNames, model.contract.preprocess.inputTensorName),
+      outputNames: fallbackSession.outputNames,
+      preprocessCanvas,
+      preprocessContext,
+      inputData,
+      inputTensor: new ort.Tensor('float32', inputData, inputDims),
+      inputGpuBuffer: null,
+      gpuDevice,
+    }
+  }
+}
+
+async function safelyReleaseSession(session: ort.InferenceSession | null) {
+  if (!session || typeof session.release !== 'function') {
+    return
+  }
+
+  try {
+    await session.release()
+  } catch {
+    // 忽略释放失败，避免回退路径被中断。
+  }
+}
+
+async function createWebGpuSession(
+  bytes: Uint8Array,
+  device: GPUDevice,
+  enableGraphCapture: boolean,
+): Promise<ort.InferenceSession> {
+  return ort.InferenceSession.create(bytes, {
+    executionProviders: [{
+      name: 'webgpu',
+      device,
+    }],
+    enableGraphCapture,
+    preferredOutputLocation: 'gpu-buffer',
   })
+}
+
+function createInputGpuBuffer(device: GPUDevice, byteLength: number): GPUBuffer {
+  return device.createBuffer({
+    size: byteLength,
+    usage: GPU_BUFFER_USAGE_COPY_DST | GPU_BUFFER_USAGE_STORAGE,
+  })
+}
+
+function resolveInputName(inputNames: readonly string[], preferredName: string): string {
+  return resolveTensorName(inputNames, preferredName, '输入')
+}
+
+function resolveRequestedOutputNames(
+  outputNames: readonly string[],
+  preferredNames: readonly string[],
+): string[] {
+  if (preferredNames.length === 0) {
+    return [...outputNames]
+  }
+
+  const resolvedNames: string[] = []
+  for (const preferredName of preferredNames) {
+    const resolvedName = resolveTensorName(outputNames, preferredName, '输出')
+    if (!resolvedNames.includes(resolvedName)) {
+      resolvedNames.push(resolvedName)
+    }
+  }
+
+  return resolvedNames
+}
+
+function resolveTensorName(
+  actualNames: readonly string[],
+  preferredName: string,
+  kind: '输入' | '输出',
+): string {
+  if (preferredName) {
+    const normalizedPreferredName = preferredName.toLowerCase()
+    const exactMatch = actualNames.find((name) => name.toLowerCase() === normalizedPreferredName)
+    if (exactMatch) {
+      return exactMatch
+    }
+
+    const partialMatch = actualNames.find((name) => name.toLowerCase().includes(normalizedPreferredName))
+    if (partialMatch) {
+      return partialMatch
+    }
+  }
+
+  if (actualNames.length === 1) {
+    return actualNames[0]
+  }
+
+  throw new Error(`无法在模型${kind}中匹配 ${preferredName || '目标名称'}。`)
+}
+
+function prepareInput(
+  sessionState: SessionState,
+  source: CanvasImageSource,
+  contract: ResolvedModelContract,
+): PreparedInput {
+  const geometry = drawPreprocessedImage(sessionState.preprocessContext, source, contract)
+  const targetWidth = contract.preprocess.imageWidth
+  const targetHeight = contract.preprocess.imageHeight
+  const imageData = sessionState.preprocessContext.getImageData(0, 0, targetWidth, targetHeight)
+  writeTensorData(sessionState.inputData, imageData.data, targetWidth * targetHeight)
+
+  if (sessionState.inputGpuBuffer && sessionState.gpuDevice) {
+    sessionState.gpuDevice.queue.writeBuffer(sessionState.inputGpuBuffer, 0, sessionState.inputData)
+  }
 
   return {
-    session,
-    providerName: 'webgpu',
+    tensor: sessionState.inputTensor,
+    geometry,
+  }
+}
+
+function writeTensorData(
+  target: Float32Array,
+  source: Uint8ClampedArray,
+  channelSize: number,
+) {
+  for (let index = 0; index < channelSize; index += 1) {
+    const pixelOffset = index * 4
+    target[index] = source[pixelOffset] / 255
+    target[channelSize + index] = source[pixelOffset + 1] / 255
+    target[channelSize * 2 + index] = source[pixelOffset + 2] / 255
   }
 }
 
@@ -175,7 +356,7 @@ async function normalizeOutputs(
     Object.entries(outputMap).map(async ([name, value]) => {
       const tensor = value as ort.Tensor
       const rawData = typeof tensor.getData === 'function'
-        ? await tensor.getData()
+        ? await tensor.getData(true)
         : tensor.data
       const data = ensureNumericTensorData(rawData, name)
 
@@ -224,43 +405,26 @@ export function drawSourceToCanvas(
   source: CanvasImageSource,
   targetCanvas?: HTMLCanvasElement,
 ): HTMLCanvasElement {
+  return captureSourceFrame(source, targetCanvas)
+}
+
+function captureSourceFrame(
+  source: CanvasImageSource,
+  targetCanvas?: HTMLCanvasElement,
+): HTMLCanvasElement {
   const { width, height } = resolveSourceDimensions(source)
   const canvas = targetCanvas ?? document.createElement('canvas')
   canvas.width = width
   canvas.height = height
   const context = get2dContext(canvas)
+
+  if (source instanceof HTMLCanvasElement && source === canvas) {
+    return canvas
+  }
+
+  context.clearRect(0, 0, width, height)
   context.drawImage(source, 0, 0, width, height)
   return canvas
-}
-
-function createPreparedInput(
-  sourceCanvas: HTMLCanvasElement,
-  contract: ResolvedModelContract,
-): PreparedInput {
-  const targetWidth = contract.preprocess.imageWidth
-  const targetHeight = contract.preprocess.imageHeight
-  const preprocessCanvas = document.createElement('canvas')
-  preprocessCanvas.width = targetWidth
-  preprocessCanvas.height = targetHeight
-
-  const context = get2dContext(preprocessCanvas)
-  const geometry = drawPreprocessedImage(context, sourceCanvas, contract)
-
-  const imageData = context.getImageData(0, 0, targetWidth, targetHeight)
-  const tensorData = new Float32Array(3 * targetWidth * targetHeight)
-  const channelSize = targetWidth * targetHeight
-
-  for (let index = 0; index < channelSize; index += 1) {
-    const pixelOffset = index * 4
-    tensorData[index] = imageData.data[pixelOffset] / 255
-    tensorData[channelSize + index] = imageData.data[pixelOffset + 1] / 255
-    tensorData[channelSize * 2 + index] = imageData.data[pixelOffset + 2] / 255
-  }
-
-  return {
-    tensor: new ort.Tensor('float32', tensorData, [1, 3, targetHeight, targetWidth]),
-    geometry,
-  }
 }
 
 function ensureNumericTensorData(data: ort.Tensor['data'], outputName: string): ArrayLike<number> {
@@ -272,15 +436,10 @@ function ensureNumericTensorData(data: ort.Tensor['data'], outputName: string): 
 }
 
 function drawDetections(
-  sourceCanvas: HTMLCanvasElement,
+  canvas: HTMLCanvasElement,
   detections: RecognitionResult['detections'],
-  targetCanvas?: HTMLCanvasElement,
-): HTMLCanvasElement {
-  const canvas = targetCanvas ?? document.createElement('canvas')
-  canvas.width = sourceCanvas.width
-  canvas.height = sourceCanvas.height
+) {
   const context = get2dContext(canvas)
-  context.drawImage(sourceCanvas, 0, 0)
   context.lineWidth = 3
   context.font = "15px 'Cascadia Code', 'Consolas', monospace"
   context.textBaseline = 'top'
@@ -300,12 +459,13 @@ function drawDetections(
     context.fillStyle = '#f8f5ed'
     context.fillText(label, item.box.x + 7, textY + 5)
   })
-
-  return canvas
 }
 
-function get2dContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
-  const context = canvas.getContext('2d')
+function get2dContext(
+  canvas: HTMLCanvasElement,
+  options?: CanvasRenderingContext2DSettings,
+): CanvasRenderingContext2D {
+  const context = canvas.getContext('2d', options)
   if (!context) {
     throw new Error('浏览器不支持 Canvas 2D。')
   }
@@ -315,13 +475,12 @@ function get2dContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
 
 function drawPreprocessedImage(
   context: CanvasRenderingContext2D,
-  sourceCanvas: HTMLCanvasElement,
+  source: CanvasImageSource,
   contract: ResolvedModelContract,
 ): PreprocessedImageGeometry {
   const targetWidth = contract.preprocess.imageWidth
   const targetHeight = contract.preprocess.imageHeight
-  const sourceWidth = sourceCanvas.width
-  const sourceHeight = sourceCanvas.height
+  const { width: sourceWidth, height: sourceHeight } = resolveSourceDimensions(source)
   context.clearRect(0, 0, targetWidth, targetHeight)
   context.fillStyle = '#000'
   context.fillRect(0, 0, targetWidth, targetHeight)
@@ -333,7 +492,7 @@ function drawPreprocessedImage(
     const padLeft = (targetWidth - contentWidth) / 2
     const padTop = (targetHeight - contentHeight) / 2
 
-    context.drawImage(sourceCanvas, padLeft, padTop, contentWidth, contentHeight)
+    context.drawImage(source, padLeft, padTop, contentWidth, contentHeight)
 
     return {
       sourceWidth,
@@ -350,7 +509,7 @@ function drawPreprocessedImage(
     }
   }
 
-  context.drawImage(sourceCanvas, 0, 0, targetWidth, targetHeight)
+  context.drawImage(source, 0, 0, targetWidth, targetHeight)
 
   return {
     sourceWidth,
