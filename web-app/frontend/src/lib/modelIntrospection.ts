@@ -1,5 +1,3 @@
-import onnxProtoSource from './onnxProtoSource.generated.ts'
-
 import {
   resolveLabelsFromMetadata,
   type TensorDimension,
@@ -180,12 +178,16 @@ function toInteger(value: number | LongLike | null | undefined): number | null {
 }
 
 async function loadOnnxProto(): Promise<{ onnx?: { ModelProto: { decode: (input: Uint8Array) => DecodedModel } } }> {
-  const protobufModule = await import('protobufjs/minimal.js')
+  const [protobufModule, onnxProtoSourceModule] = await Promise.all([
+    import('protobufjs/minimal.js'),
+    import('./onnxProtoSource.generated.ts'),
+  ])
   const protobuf = (
     'default' in protobufModule
       ? protobufModule.default
       : protobufModule
   ) as Record<string, unknown>
+  const onnxProtoSource = onnxProtoSourceModule.default
   const module = { exports: {} as unknown }
   const exports = module.exports
   const require = (id: string): unknown => {

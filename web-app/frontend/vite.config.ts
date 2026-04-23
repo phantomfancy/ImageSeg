@@ -12,6 +12,7 @@ export default defineConfig({
     conditions: ['onnxruntime-web-use-extern-wasm'],
     alias: {
       '@contracts': resolve(rootDir, '../contracts/src/index.ts'),
+      '@protobufjs/inquire': resolve(rootDir, 'src/lib/protobufInquireBrowserShim.cjs'),
     },
   },
   server: {
