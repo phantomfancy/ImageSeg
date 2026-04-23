@@ -256,7 +256,6 @@ function App() {
     runtimeMessage ||
     (importedModel && !isWebGpuSupported ? (webGpuSupportState.message ?? '') : '')
   const displayedPendingThreshold = pendingDetectionThreshold.toFixed(2)
-  const displayedAppliedThreshold = appliedDetectionThreshold.toFixed(2)
   const displayedAppliedMaxDetections = String(appliedMaxDetections)
   const displayedFps = streamFps === null ? '-' : streamFps.toFixed(1)
   const previewZoomScaleLabel = `${Math.round(previewViewerScale * 100)}%`
@@ -282,9 +281,6 @@ function App() {
     : isPreviewScalableTarget(availablePreviewZoomTarget)
       ? '打开查看器'
       : '打开播放器'
-  const previewDialogTitle = getPreviewDialogTitle(previewZoomTarget)
-  const previewDialogHint = getPreviewDialogHint(previewZoomTarget)
-  const previewDialogTip = getPreviewDialogTip(previewZoomTarget)
   const currentThemeIcon = resolvedTheme === 'dark' ? moonIcon : sunIcon
   const currentThemeLabel = themeMode === 'system'
     ? `跟随系统 · ${resolvedTheme === 'dark' ? '深色' : '浅色'}`
@@ -1552,9 +1548,10 @@ function App() {
                 <section className="hero hero--home">
                   <div className="hero__content">
                     <div className="hero__eyebrow">4C-ai装备识别工具</div>
-                    <h1>浏览器内完成装备识别与结果复核</h1>
+                    <h1>ai装备识别工具</h1>
                     <p className="hero__copy">
-                      面向单图、视频与摄像头场景的本地 ONNX 推理工作台。模型导入、推理编排、结果解码和导出全部在前端完成，适合快速验证装备识别模型。
+                      面向单图、视频与摄像头场景的本地 ONNX 推理工作台，使用基于CNN或Transformers的目标检测模型进行图像推理。
+                      导入、推理编排、结果解码和导出全部在前端完成，适合快速验证装备识别模型。
                     </p>
                     <div className="hero__actions">
                       <button
@@ -1622,7 +1619,6 @@ function App() {
               <article className="panel panel--input" id="input-import" data-nav-section>
                 <header className="panel__header">
                   <h2>输入与导入</h2>
-                  <p>选择输入模式后，再导入 ONNX 模型与可选的 Hugging Face 配置文件。</p>
                 </header>
 
                 <div className="mode-switch">
@@ -1723,9 +1719,6 @@ function App() {
                       void handleOnnxSelection(event.target.files?.[0] ?? null)
                     }}
                   />
-                  <span className="field__hint">
-                    {onnxModelDraft?.fileName ?? '仅允许导入 .onnx 文件。'}
-                  </span>
                 </label>
 
                 <label className="field">
@@ -1739,13 +1732,6 @@ function App() {
                       void handleConfigSelection(event.target.files?.[0] ?? null)
                     }}
                   />
-                  <span className="field__hint">
-                    {configFile?.name ?? (
-                      importControls.configEnabled
-                        ? `仅允许导入 ${CONFIG_FILE_NAME}。`
-                        : '请先导入 ONNX，并识别为 Hugging Face 风格模型。'
-                    )}
-                  </span>
                 </label>
 
                 <label className="field">
@@ -1759,13 +1745,6 @@ function App() {
                       void handlePreprocessorSelection(event.target.files?.[0] ?? null)
                     }}
                   />
-                  <span className="field__hint">
-                    {preprocessorConfigFile?.name ?? (
-                      importControls.preprocessorEnabled
-                        ? `仅允许导入 ${PREPROCESSOR_CONFIG_FILE_NAME}。`
-                        : '当前模型不需要该配置文件。'
-                    )}
-                  </span>
                 </label>
 
                 {onnxModelDraft?.family === 'hf-detr-like' ? (
@@ -1795,7 +1774,6 @@ function App() {
             <article className="panel panel--preview operation-grid__preview" id="results-export" data-nav-section>
               <header className="panel__header">
                 <h2>统一预览</h2>
-                <p>识别前显示输入源，识别后在同一区域显示结果叠加画面。</p>
               </header>
 
               <div className="preview-card preview-stage">
@@ -1866,7 +1844,6 @@ function App() {
             <article className="panel panel--settings operation-grid__settings" id="inference-settings" data-nav-section>
               <header className="panel__header">
                 <h2>推理设置</h2>
-                <p>在启动识别前统一设置阈值、识别数量和导出相关操作。</p>
               </header>
 
               <label className="field">
@@ -1897,11 +1874,6 @@ function App() {
                   />
                   <span className="threshold-control__value">{displayedPendingThreshold}</span>
                 </div>
-                <span className="field__hint">
-                  {importedModel
-                    ? `当前值 ${displayedPendingThreshold}，已生效 ${displayedAppliedThreshold}。拖动过程中不会立即重跑推理，松开后新阈值才会生效。`
-                    : '导入模型后可调整推理阈值。'}
-                </span>
               </label>
 
               <label className="field">
@@ -1924,11 +1896,6 @@ function App() {
                   />
                   <span className="count-control__value">{displayedAppliedMaxDetections}</span>
                 </div>
-                <span className="field__hint">
-                  {importedModel
-                    ? `输入 0 代表全部识别并绘制；当前输入 ${pendingMaxDetectionsInput || '0'}，已生效 ${displayedAppliedMaxDetections}。失焦或开始推理时才会提交新值。`
-                    : '导入模型后可设置识别数量上限，0 代表全部识别并绘制。'}
-                </span>
               </label>
 
               <div className="actions actions--stacked">
@@ -2022,7 +1989,6 @@ function App() {
             <article className="panel panel--detections results-row__panel">
               <header className="panel__header">
                 <h2>检测结果</h2>
-                <p>输出来自 `Contracts` 约束的统一检测结构。</p>
               </header>
 
               <div className="metric-grid metric-grid--compact">
@@ -2060,7 +2026,6 @@ function App() {
           <article className="panel panel--contract diagnostics-panel diagnostics-row">
             <header className="panel__header">
               <h2>模型契约</h2>
-              <p>导入后先根据输入输出签名解析 family、预处理和解码规则。</p>
             </header>
 
             {displayedContract ? (
@@ -2226,8 +2191,6 @@ function App() {
                     <span className="preview-zoom__scale">{previewZoomScaleLabel}</span>
                   ) : null}
                 </div>
-                <h3 className="preview-zoom__title">{previewDialogTitle}</h3>
-                <p className="preview-zoom__hint">{previewDialogHint}</p>
                 <div className="preview-zoom__meta">
                   <span className="preview-zoom__meta-item">模式 {inputMode}</span>
                   <span className="preview-zoom__meta-item">Runtime {resultProvider || '-'}</span>
@@ -2356,10 +2319,6 @@ function App() {
               </div>
             </div>
 
-            <div className="preview-zoom__footer">
-              <span className="preview-zoom__footer-item">{previewDialogTip}</span>
-              <span className="preview-zoom__footer-item">Esc 可直接关闭当前预览</span>
-            </div>
           </div>
         </div>
       ) : null}
@@ -2634,50 +2593,6 @@ function resolveThemeMode(
   systemTheme: ResolvedTheme,
 ): ResolvedTheme {
   return themeMode === 'system' ? systemTheme : themeMode
-}
-
-function getPreviewDialogTitle(target: PreviewZoomTarget | null): string {
-  switch (target) {
-    case 'image':
-      return '图像查看器'
-    case 'result-canvas':
-      return '检测结果查看器'
-    case 'video':
-      return '视频播放器'
-    case 'camera':
-      return '实时画面播放器'
-    default:
-      return '预览'
-  }
-}
-
-function getPreviewDialogHint(target: PreviewZoomTarget | null): string {
-  switch (target) {
-    case 'image':
-      return '用于查看原始输入图片，适合快速检查细节和构图。'
-    case 'result-canvas':
-      return '用于检查推理后的叠加结果，便于核对框选位置与标签。'
-    case 'video':
-      return '保留原生视频控件，可直接拖动时间轴、暂停和全屏。'
-    case 'camera':
-      return '实时显示当前摄像头流，适合放大观察现场画面。'
-    default:
-      return '当前预览内容可在此处集中查看。'
-  }
-}
-
-function getPreviewDialogTip(target: PreviewZoomTarget | null): string {
-  switch (target) {
-    case 'image':
-    case 'result-canvas':
-      return '滚轮缩放，拖拽平移，双击可在适合窗口和放大视图之间切换。'
-    case 'video':
-      return '使用原生控件操作播放与定位，上方按钮负责容器级全屏。'
-    case 'camera':
-      return '摄像头实时画面不做伪缩放，建议直接使用全屏查看。'
-    default:
-      return '可通过上方按钮切换查看方式。'
-  }
 }
 
 function isPreviewScalableTarget(target: PreviewZoomTarget): boolean {
