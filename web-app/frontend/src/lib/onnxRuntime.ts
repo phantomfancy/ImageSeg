@@ -302,7 +302,7 @@ async function createRuntimeWorkerClient(): Promise<RuntimeWorkerClient> {
     return runtimeHooks.createWorkerClient()
   }
 
-  const { default: OnnxRuntimeWorker } = await import('./onnxRuntimeWorkerFactory.js')
+  const { default: OnnxRuntimeWorker } = await import('./onnxRuntimeWorkerFactory.ts')
   return new BrowserRuntimeWorkerClient(new OnnxRuntimeWorker())
 }
 

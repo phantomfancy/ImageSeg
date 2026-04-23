@@ -119,6 +119,7 @@ npm run test
 
 注意：
 
+- `web-app/frontend/public/ort` 是由 `npm run prepare:ort` 从 `onnxruntime-web` 复制生成的前端运行时资产目录，不需要提交到版本库。
 - `npm run test` 中的 `npm run test:frontend` 与 `npm run verify:training-models` 依赖 `pytorch-training/training_result` 下的测试模型文件集。
 - 如果当前机器没有准备 `pytorch-training/training_result`，这两项检查会因找不到 `.onnx` / `config.json` / `preprocessor_config.json` 而失败，这属于预期行为，不代表前端类型检查、`tsgo` 迁移或构建链本身存在问题。
 - `npm run publish` / `npm run deploy` 依赖 `apphost.ts` 中已经声明 Docker Compose 部署环境，并依赖 `aspire.config.json` 中已包含 `Aspire.Hosting.Docker`。

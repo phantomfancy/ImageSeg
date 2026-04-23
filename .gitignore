@@ -12,6 +12,7 @@
 .modules/
 aspire-output/
 web-app/frontend/src/lib/onnxProtoSource.generated.ts
+web-app/frontend/public/ort/
 *.onnx
 *.pt
 dataset*/
