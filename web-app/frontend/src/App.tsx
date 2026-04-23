@@ -84,7 +84,7 @@ const PROJECT_LICENSE_URL = `${PROJECT_REPOSITORY_URL}/blob/master/LICENSE`
 const FOOTER_CONTACT_EMAIL = 'contact@4cimageseg.local'
 const FOOTER_FILING_NUMBER = '备案号待补充'
 const FOOTER_CERTIFICATION_INFO = '认证信息待补充'
-const FOOTER_COPYRIGHT_TEXT = `Copyright © ${new Date().getFullYear()} 4C-ai装备识别工具`
+const FOOTER_COPYRIGHT_TEXT = `Copyright © ${new Date().getFullYear()} ★ASU-全域智侦`
 const HELP_CONTENT: ReadonlyArray<{ title: string; body: string }> = [
   {
     title: '输入模式',
@@ -256,6 +256,7 @@ function App() {
     runtimeMessage ||
     (importedModel && !isWebGpuSupported ? (webGpuSupportState.message ?? '') : '')
   const displayedPendingThreshold = pendingDetectionThreshold.toFixed(2)
+  const displayedAppliedThreshold = appliedDetectionThreshold.toFixed(2)
   const displayedAppliedMaxDetections = String(appliedMaxDetections)
   const displayedFps = streamFps === null ? '-' : streamFps.toFixed(1)
   const previewZoomScaleLabel = `${Math.round(previewViewerScale * 100)}%`
@@ -1874,6 +1875,11 @@ function App() {
                   />
                   <span className="threshold-control__value">{displayedPendingThreshold}</span>
                 </div>
+                <span className="field__hint">
+                {importedModel
+                  ? `当前值 ${displayedPendingThreshold}，已生效 ${displayedAppliedThreshold}。拖动过程中不会立即重跑推理，松开后新阈值才会生效。`
+                  : '导入模型后可调整推理阈值。'}
+              </span>
               </label>
 
               <label className="field">
