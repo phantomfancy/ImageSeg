@@ -35,7 +35,7 @@ const ultralyticsYoloContract = resolveModelContract({
 })
 
 assert.equal(ultralyticsYoloContract.family, 'ultralytics-yolo-detect')
-assert.equal(ultralyticsYoloContract.decoder.scoreThreshold, 0.08)
+assert.equal(ultralyticsYoloContract.decoder.scoreThreshold, 0.35)
 assert.equal(ultralyticsYoloContract.decoder.nmsIouThreshold, 0.45)
 
 const ultralyticsRtDetrContract = resolveModelContract({

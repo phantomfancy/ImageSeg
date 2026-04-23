@@ -81,8 +81,15 @@ const cases = [
 ] satisfies readonly VerificationCase[]
 
 const files = await collectOnnxFiles(trainingResultDirectory)
-if (files.length !== 4) {
-  throw new Error(`未在 ${trainingResultDirectory} 下找到完整的 ONNX 模型集。`)
+const discoveredOnnxFiles = new Set(files.map((file) => toRelativePath(file, trainingResultDirectory)))
+const missingOnnxFiles = cases
+  .map((item) => item.onnx)
+  .filter((file) => !discoveredOnnxFiles.has(file))
+
+if (missingOnnxFiles.length > 0) {
+  throw new Error(
+    `未在 ${trainingResultDirectory} 下找到必需的 ONNX 模型：${missingOnnxFiles.join('、')}`,
+  )
 }
 
 for (const item of cases) {
@@ -133,6 +140,10 @@ async function collectOnnxFiles(directory: string): Promise<string[]> {
   }
 
   return files.sort()
+}
+
+function toRelativePath(filePath: string, baseDirectory: string): string {
+  return path.relative(baseDirectory, filePath).split(path.sep).join('/')
 }
 
 async function readAsFile(filePath: string): Promise<File> {

@@ -54,7 +54,7 @@ const ultralyticsModel = await finalizeModelImport({
 assert.equal(ultralyticsModel.contract.family, 'ultralytics-yolo-detect')
 assert.deepEqual(ultralyticsModel.contract.labels, { 0: 'himars' })
 assert.equal(ultralyticsModel.webGpuCompatibility.supported, true)
-assert.equal(ultralyticsModel.contract.decoder.scoreThreshold, 0.08)
+assert.equal(ultralyticsModel.contract.decoder.scoreThreshold, 0.35)
 assert.equal(ultralyticsModel.contract.decoder.nmsIouThreshold, 0.45)
 
 const hfOnnx = await readAsFile(path.join(trainingResultDirectory, 'rtdetrv2_himars_style_hugginface', 'model_fp16.onnx'))

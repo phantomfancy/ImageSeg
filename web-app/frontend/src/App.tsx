@@ -14,6 +14,8 @@ import type { DetectionRun, ImportedModel, RunDetectionOptions } from './lib/onn
 import {
   getWebGpuSupportState,
   inspectImportedModel,
+  prepareImportedModelSession,
+  releaseCachedModelSessions,
   runDetectionOnSource,
   runSingleImageDetection,
 } from './lib/onnxRuntime'
@@ -48,7 +50,7 @@ type CameraDeviceOption = {
   label: string
 }
 
-const DEFAULT_DETECTION_THRESHOLD = 0.35
+const DEFAULT_DETECTION_THRESHOLD = 0.8
 const DEFAULT_MAX_DETECTIONS = 0
 const FPS_WINDOW_MS = 1000
 const PREVIEW_VIEWER_DEFAULT_SCALE = 1
@@ -299,6 +301,7 @@ function App() {
   const canRunImage =
     inputMode === 'image' &&
     Boolean(imageFile && importedModel && isWebGpuSupported && !modelBusy && !imageDetectBusy && streamState === 'idle')
+  const canChangeModel = !modelBusy && !imageDetectBusy && streamState === 'idle'
   const canExportImage =
     inputMode === 'image' &&
     hasRenderedResult &&
@@ -417,6 +420,16 @@ function App() {
     setPreprocessorInputKey((value) => value + 1)
   }
 
+  function rejectModelChangeWhileBusy(resetNativeInput?: () => void): boolean {
+    if (canChangeModel) {
+      return false
+    }
+
+    setStatusMessage('当前推理或模型处理尚未结束，请等待完成后再切换模型。')
+    resetNativeInput?.()
+    return true
+  }
+
   const stopActiveStream = useCallback((statusText?: string) => {
     resetPreviewViewer()
     frameLoopTokenRef.current += 1
@@ -476,6 +489,10 @@ function App() {
   useEffect(() => () => {
     stopActiveStream()
   }, [stopActiveStream])
+
+  useEffect(() => () => {
+    void releaseCachedModelSessions()
+  }, [])
 
   useEffect(() => {
     if (!isPreviewZoomOpen && !isHelpOpen && !isThemeMenuOpen) {
@@ -686,18 +703,25 @@ function App() {
 
   async function handleOnnxSelection(file: File | null) {
     let shouldResetNativeInput = false
+    if (rejectModelChangeWhileBusy(() => setOnnxInputKey((value) => value + 1))) {
+      return
+    }
+
     stopActiveStream()
     clearImportedModelState()
     resetSidecarSelections()
     setOnnxModelDraft(null)
+    setModelBusy(true)
+    setStatusMessage('正在释放旧模型推理资源...')
+    await releaseCachedModelSessions()
 
     if (!file) {
       setStatusMessage('尚未选择 ONNX 模型文件。')
       setOnnxInputKey((value) => value + 1)
+      setModelBusy(false)
       return
     }
 
-    setModelBusy(true)
     setStatusMessage(`正在解析 ONNX 模型 ${file.name}...`)
 
     try {
@@ -714,6 +738,8 @@ function App() {
       }
 
       const model = await inspectImportedModel({ onnxModel: nextOnnxModel })
+      setStatusMessage(`正在预热 ONNX 模型 ${file.name} 的推理会话...`)
+      await prepareImportedModelSession(model)
       startTransition(() => {
         setOnnxModelDraft(nextOnnxModel)
         setImportedModel(model)
@@ -724,7 +750,7 @@ function App() {
       })
     } catch (error) {
       shouldResetNativeInput = true
-      setStatusMessage(`模型解析失败：${formatError(error)}`)
+      setStatusMessage(`模型解析或会话预热失败：${formatError(error)}`)
     } finally {
       setModelBusy(false)
       if (shouldResetNativeInput) {
@@ -871,6 +897,10 @@ function App() {
 
   async function handleConfigSelection(file: File | null) {
     let shouldResetNativeInput = false
+    if (rejectModelChangeWhileBusy(() => setConfigInputKey((value) => value + 1))) {
+      return
+    }
+
     if (!file || !onnxModelDraft || onnxModelDraft.family !== 'hf-detr-like') {
       setConfigInputKey((value) => value + 1)
       return
@@ -886,6 +916,8 @@ function App() {
 
     setModelBusy(true)
     setStatusMessage(`正在解析 ${CONFIG_FILE_NAME}...`)
+    clearImportedModelState()
+    await releaseCachedModelSessions()
 
     try {
       const model = await inspectImportedModel({
@@ -893,6 +925,8 @@ function App() {
         configFile: file,
         preprocessorConfigFile: preprocessorConfigFile ?? undefined,
       })
+      setStatusMessage(`正在预热 ${onnxModelDraft.fileName} 的推理会话...`)
+      await prepareImportedModelSession(model)
       startTransition(() => {
         setConfigFile(file)
         setImportedModel(model)
@@ -903,7 +937,7 @@ function App() {
       })
     } catch (error) {
       shouldResetNativeInput = true
-      setStatusMessage(`config.json 导入失败：${formatError(error)}`)
+      setStatusMessage(`config.json 导入或会话预热失败：${formatError(error)}`)
     } finally {
       setModelBusy(false)
       if (shouldResetNativeInput) {
@@ -914,6 +948,10 @@ function App() {
 
   async function handlePreprocessorSelection(file: File | null) {
     let shouldResetNativeInput = false
+    if (rejectModelChangeWhileBusy(() => setPreprocessorInputKey((value) => value + 1))) {
+      return
+    }
+
     if (!file || !onnxModelDraft || onnxModelDraft.family !== 'hf-detr-like') {
       setPreprocessorInputKey((value) => value + 1)
       return
@@ -940,6 +978,8 @@ function App() {
 
     setModelBusy(true)
     setStatusMessage(`正在解析 ${PREPROCESSOR_CONFIG_FILE_NAME}...`)
+    clearImportedModelState()
+    await releaseCachedModelSessions()
 
     try {
       const model = await inspectImportedModel({
@@ -947,6 +987,8 @@ function App() {
         configFile,
         preprocessorConfigFile: file,
       })
+      setStatusMessage(`正在预热 ${onnxModelDraft.fileName} 的推理会话...`)
+      await prepareImportedModelSession(model)
       startTransition(() => {
         setPreprocessorConfigFile(file)
         setImportedModel(model)
@@ -957,7 +999,7 @@ function App() {
       })
     } catch (error) {
       shouldResetNativeInput = true
-      setStatusMessage(`preprocessor_config.json 导入失败：${formatError(error)}`)
+      setStatusMessage(`preprocessor_config.json 导入或会话预热失败：${formatError(error)}`)
     } finally {
       setModelBusy(false)
       if (shouldResetNativeInput) {
@@ -968,6 +1010,10 @@ function App() {
 
   async function handleAutoDiscoverSidecars() {
     if (!onnxModelDraft || onnxModelDraft.family !== 'hf-detr-like') {
+      return
+    }
+
+    if (rejectModelChangeWhileBusy()) {
       return
     }
 
@@ -1005,11 +1051,15 @@ function App() {
         return
       }
 
+      clearImportedModelState()
+      await releaseCachedModelSessions()
       const model = await inspectImportedModel({
         onnxModel: onnxModelDraft,
         configFile: nextConfigFile,
         preprocessorConfigFile: nextPreprocessorConfigFile ?? undefined,
       })
+      setStatusMessage(`正在预热 ${onnxModelDraft.fileName} 的推理会话...`)
+      await prepareImportedModelSession(model)
       startTransition(() => {
         if (discovered.configFile) {
           setConfigFile(discovered.configFile)
@@ -1027,7 +1077,7 @@ function App() {
       if (isAbortError(error)) {
         setStatusMessage('已取消自动查找同目录配置。')
       } else {
-        setStatusMessage(`自动查找失败：${formatError(error)}`)
+        setStatusMessage(`自动查找或会话预热失败：${formatError(error)}`)
       }
     } finally {
       setModelBusy(false)
@@ -1590,7 +1640,7 @@ function App() {
                     key={onnxInputKey}
                     type="file"
                     accept=".onnx"
-                    disabled={modelBusy || streamState !== 'idle'}
+                    disabled={!canChangeModel}
                     onChange={(event) => {
                       void handleOnnxSelection(event.target.files?.[0] ?? null)
                     }}
@@ -1606,7 +1656,7 @@ function App() {
                     key={configInputKey}
                     type="file"
                     accept=".json,application/json"
-                    disabled={!importControls.configEnabled || modelBusy || streamState !== 'idle'}
+                    disabled={!importControls.configEnabled || !canChangeModel}
                     onChange={(event) => {
                       void handleConfigSelection(event.target.files?.[0] ?? null)
                     }}
@@ -1626,7 +1676,7 @@ function App() {
                     key={preprocessorInputKey}
                     type="file"
                     accept=".json,application/json"
-                    disabled={!importControls.preprocessorEnabled || modelBusy || streamState !== 'idle'}
+                    disabled={!importControls.preprocessorEnabled || !canChangeModel}
                     onChange={(event) => {
                       void handlePreprocessorSelection(event.target.files?.[0] ?? null)
                     }}
@@ -1645,7 +1695,7 @@ function App() {
                     <button
                       type="button"
                       className="action action--secondary"
-                      disabled={!importControls.autoDiscoverEnabled || modelBusy || discoverBusy || streamState !== 'idle'}
+                      disabled={!importControls.autoDiscoverEnabled || !canChangeModel || discoverBusy}
                       onClick={() => void handleAutoDiscoverSidecars()}
                     >
                       {discoverBusy ? '查找中...' : '自动查找同目录配置'}

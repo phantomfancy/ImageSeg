@@ -130,7 +130,7 @@ export const knownModelContracts: Record<ModelFamily, ModelManifest> = {
     decoder: {
       layoutKind: 'logits-and-pred-boxes',
       outputTensorNames: ['logits', 'pred_boxes'],
-      scoreThreshold: 0.35,
+      scoreThreshold: 0.8,
       maxDetections: 20,
       nmsIouThreshold: null,
     },
@@ -153,7 +153,7 @@ export const knownModelContracts: Record<ModelFamily, ModelManifest> = {
     decoder: {
       layoutKind: 'ultralytics-anchors',
       outputTensorNames: ['output0'],
-      scoreThreshold: 0.08,
+      scoreThreshold: 0.35,
       maxDetections: 20,
       nmsIouThreshold: 0.45,
     },

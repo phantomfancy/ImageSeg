@@ -1,4 +1,3 @@
-import * as ort from 'onnxruntime-web/webgpu'
 import {
   decodeDetections,
   normalizeScore,
@@ -14,35 +13,47 @@ import {
   type InspectedModelPackage,
 } from './modelPackage.ts'
 
-ort.env.wasm.proxy = false
-ort.env.wasm.numThreads = 1
-ort.env.wasm.wasmPaths = {
-  mjs: new URL('/ort/ort-wasm-simd-threaded.asyncify.mjs', window.location.href),
-  wasm: new URL('/ort/ort-wasm-simd-threaded.asyncify.wasm', window.location.href),
-}
-
-if (ort.env.webgpu) {
-  ort.env.webgpu.powerPreference = 'high-performance'
-}
-
 const WEBGPU_UNSUPPORTED_MESSAGE = '当前浏览器不支持 WebGPU，无法执行识别。'
-const GPU_BUFFER_USAGE_COPY_DST = 0x0008
-const GPU_BUFFER_USAGE_STORAGE = 0x0080
 
 type SessionState = {
-  session: ort.InferenceSession
+  client: RuntimeWorkerClient
   providerName: 'webgpu'
   inputName: string
   outputNames: readonly string[]
   preprocessCanvas: HTMLCanvasElement
   preprocessContext: CanvasRenderingContext2D
   inputData: Float32Array
-  inputTensor: ort.Tensor
-  inputGpuBuffer: GPUBuffer | null
-  gpuDevice: GPUDevice | null
 }
 
-const sessionCache = new Map<string, Promise<SessionState>>()
+export type RuntimeWorkerInitOptions = {
+  modelKey: string
+  bytes: Uint8Array
+  preferredInputName: string
+  inputDims: readonly [number, number, number, number]
+  enableGraphCapture: true
+}
+
+export type RuntimeWorkerSessionMetadata = {
+  inputName: string
+  outputNames: readonly string[]
+}
+
+export interface RuntimeWorkerClient {
+  init(options: RuntimeWorkerInitOptions): Promise<RuntimeWorkerSessionMetadata>
+  run(inputData: Float32Array, fetchNames: readonly string[]): Promise<Record<string, TensorLike>>
+  release(): Promise<void>
+  terminate(): void
+}
+
+export interface WebGpuRuntimeHooks {
+  isWebGpuSupported?: () => boolean
+  createCanvas?: () => HTMLCanvasElement
+  createWorkerClient?: () => RuntimeWorkerClient
+}
+
+let runtimeHooks: WebGpuRuntimeHooks | null = null
+const sessionCache = new Map<string, SessionState>()
+let sessionOperationQueue: Promise<void> = Promise.resolve()
 
 export interface WebGpuSupportState {
   supported: boolean
@@ -71,12 +82,28 @@ export interface RunDetectionOptions {
   maxDetectionsOverride?: number
 }
 
-type PreparedInput = {
-  tensor: ort.Tensor
-  geometry: PreprocessedImageGeometry
+export function setWebGpuRuntimeHooks(hooks: WebGpuRuntimeHooks | null) {
+  runtimeHooks = hooks
+}
+
+export async function prepareImportedModelSession(model: ImportedModel): Promise<void> {
+  await enqueueSessionOperation(async () => {
+    await getSessionState(model)
+  })
 }
 
 export function getWebGpuSupportState(): WebGpuSupportState {
+  if (runtimeHooks?.isWebGpuSupported) {
+    if (!runtimeHooks.isWebGpuSupported()) {
+      return {
+        supported: false,
+        message: WEBGPU_UNSUPPORTED_MESSAGE,
+      }
+    }
+
+    return { supported: true }
+  }
+
   if (typeof navigator === 'undefined' || !('gpu' in navigator)) {
     return {
       supported: false,
@@ -108,6 +135,21 @@ export async function inspectImportedModel(options: FinalizeModelImportOptions):
   }
 }
 
+export async function releaseCachedModelSessions(retainModelKey?: string): Promise<void> {
+  await enqueueSessionOperation(async () => {
+    const releaseStates = [...sessionCache.entries()]
+      .filter(([modelKey]) => modelKey !== retainModelKey)
+      .map(([modelKey, sessionState]) => {
+        sessionCache.delete(modelKey)
+        return sessionState
+      })
+
+    for (const sessionState of releaseStates) {
+      await releaseSessionState(sessionState)
+    }
+  })
+}
+
 export async function runSingleImageDetection(
   model: ImportedModel,
   imageFile: File,
@@ -134,36 +176,35 @@ export async function runDetectionOnSource(
   options?: RunDetectionOptions,
   targetCanvas?: HTMLCanvasElement,
 ): Promise<DetectionRun> {
-  const sessionState = await getSessionState(model)
-  const detectionContract = createDetectionContract(model.contract, options)
-  const annotatedCanvas = captureSourceFrame(source, targetCanvas)
-  const preparedInput = prepareInput(sessionState, source, detectionContract)
-  const fetchNames = resolveRequestedOutputNames(sessionState.outputNames, detectionContract.decoder.outputTensorNames)
-  const outputMap = await sessionState.session.run({
-    [sessionState.inputName]: preparedInput.tensor,
-  }, fetchNames)
-  const normalizedOutputs = await normalizeOutputs(outputMap)
-  const detections = decodeDetections(
-    detectionContract,
-    normalizedOutputs,
-    preparedInput.geometry,
-  )
+  return enqueueSessionOperation(async () => {
+    const sessionState = await getSessionState(model)
+    const detectionContract = createDetectionContract(model.contract, options)
+    const annotatedCanvas = captureSourceFrame(source, targetCanvas)
+    const geometry = prepareInput(sessionState, source, detectionContract)
+    const fetchNames = resolveRequestedOutputNames(sessionState.outputNames, detectionContract.decoder.outputTensorNames)
+    const normalizedOutputs = await sessionState.client.run(sessionState.inputData, fetchNames)
+    const detections = decodeDetections(
+      detectionContract,
+      normalizedOutputs,
+      geometry,
+    )
 
-  drawDetections(annotatedCanvas, detections)
+    drawDetections(annotatedCanvas, detections)
 
-  return {
-    providerName: sessionState.providerName,
-    annotatedCanvas,
-    recognitionResult: {
-      inputSource,
-      modelVersion: model.fileName,
-      detectedAtUtc: new Date().toISOString(),
-      detections,
-    },
-    runtimeMessage: detections.length === 0
-      ? buildNoDetectionsRuntimeMessage(detectionContract, normalizedOutputs)
-      : undefined,
-  }
+    return {
+      providerName: sessionState.providerName,
+      annotatedCanvas,
+      recognitionResult: {
+        inputSource,
+        modelVersion: model.fileName,
+        detectedAtUtc: new Date().toISOString(),
+        detections,
+      },
+      runtimeMessage: detections.length === 0
+        ? buildNoDetectionsRuntimeMessage(detectionContract, normalizedOutputs)
+        : undefined,
+    }
+  })
 }
 
 async function getSessionState(model: ImportedModel): Promise<SessionState> {
@@ -173,13 +214,32 @@ async function getSessionState(model: ImportedModel): Promise<SessionState> {
     return existing
   }
 
-  const promise = createSessionState(model).catch((error: unknown) => {
-    sessionCache.delete(model.key)
-    throw error
-  })
+  await releaseStaleSessionStates(model.key)
+  const sessionState = await createSessionState(model)
+  sessionCache.set(model.key, sessionState)
+  return sessionState
+}
 
-  sessionCache.set(model.key, promise)
-  return promise
+function enqueueSessionOperation<T>(operation: () => Promise<T>): Promise<T> {
+  const result = sessionOperationQueue.then(operation, operation)
+  sessionOperationQueue = result.then(
+    () => undefined,
+    () => undefined,
+  )
+  return result
+}
+
+async function releaseStaleSessionStates(retainModelKey: string) {
+  const staleSessionStates = [...sessionCache.entries()]
+    .filter(([modelKey]) => modelKey !== retainModelKey)
+    .map(([modelKey, sessionState]) => {
+      sessionCache.delete(modelKey)
+      return sessionState
+    })
+
+  for (const sessionState of staleSessionStates) {
+    await releaseSessionState(sessionState)
+  }
 }
 
 async function createSessionState(model: ImportedModel): Promise<SessionState> {
@@ -187,88 +247,176 @@ async function createSessionState(model: ImportedModel): Promise<SessionState> {
   const inputHeight = model.contract.preprocess.imageHeight
   const inputData = new Float32Array(3 * inputWidth * inputHeight)
   const inputDims = [1, 3, inputHeight, inputWidth] as const
-  const preprocessCanvas = document.createElement('canvas')
+  const preprocessCanvas = createCanvas()
   preprocessCanvas.width = inputWidth
   preprocessCanvas.height = inputHeight
   const preprocessContext = get2dContext(preprocessCanvas, { willReadFrequently: true })
-  const gpuDevice = await ort.env.webgpu.device
+  const client = await createRuntimeWorkerClient()
 
-  let graphSession: ort.InferenceSession | null = null
   try {
-    graphSession = await createWebGpuSession(model.bytes, gpuDevice, true)
-    const inputName = resolveInputName(graphSession.inputNames, model.contract.preprocess.inputTensorName)
-    const inputGpuBuffer = createInputGpuBuffer(gpuDevice, inputData.byteLength)
+    const metadata = await client.init({
+      modelKey: model.key,
+      bytes: model.bytes,
+      preferredInputName: model.contract.preprocess.inputTensorName,
+      inputDims,
+      enableGraphCapture: true,
+    })
 
     return {
-      session: graphSession,
+      client,
       providerName: 'webgpu',
-      inputName,
-      outputNames: graphSession.outputNames,
+      inputName: metadata.inputName,
+      outputNames: metadata.outputNames,
       preprocessCanvas,
       preprocessContext,
       inputData,
-      inputTensor: ort.Tensor.fromGpuBuffer(inputGpuBuffer, {
-        dataType: 'float32',
-        dims: inputDims,
-      }),
-      inputGpuBuffer,
-      gpuDevice,
     }
-  } catch {
-    await safelyReleaseSession(graphSession)
-    const fallbackSession = await createWebGpuSession(model.bytes, gpuDevice, false)
-
-    return {
-      session: fallbackSession,
-      providerName: 'webgpu',
-      inputName: resolveInputName(fallbackSession.inputNames, model.contract.preprocess.inputTensorName),
-      outputNames: fallbackSession.outputNames,
-      preprocessCanvas,
-      preprocessContext,
-      inputData,
-      inputTensor: new ort.Tensor('float32', inputData, inputDims),
-      inputGpuBuffer: null,
-      gpuDevice,
-    }
+  } catch (error) {
+    client.terminate()
+    throw error
   }
 }
 
-async function safelyReleaseSession(session: ort.InferenceSession | null) {
-  if (!session || typeof session.release !== 'function') {
-    return
-  }
-
+async function releaseSessionState(sessionState: SessionState) {
   try {
-    await session.release()
-  } catch {
-    // 忽略释放失败，避免回退路径被中断。
+    await sessionState.client.release()
+  } finally {
+    sessionState.client.terminate()
   }
 }
 
-async function createWebGpuSession(
-  bytes: Uint8Array,
-  device: GPUDevice,
-  enableGraphCapture: boolean,
-): Promise<ort.InferenceSession> {
-  return ort.InferenceSession.create(bytes, {
-    executionProviders: [{
-      name: 'webgpu',
-      device,
-    }],
-    enableGraphCapture,
-    preferredOutputLocation: 'gpu-buffer',
-  })
+function createCanvas(): HTMLCanvasElement {
+  if (runtimeHooks?.createCanvas) {
+    return runtimeHooks.createCanvas()
+  }
+
+  if (typeof document === 'undefined' || typeof document.createElement !== 'function') {
+    throw new Error('当前环境不支持创建 Canvas。')
+  }
+
+  return document.createElement('canvas')
 }
 
-function createInputGpuBuffer(device: GPUDevice, byteLength: number): GPUBuffer {
-  return device.createBuffer({
-    size: byteLength,
-    usage: GPU_BUFFER_USAGE_COPY_DST | GPU_BUFFER_USAGE_STORAGE,
-  })
+async function createRuntimeWorkerClient(): Promise<RuntimeWorkerClient> {
+  if (runtimeHooks?.createWorkerClient) {
+    return runtimeHooks.createWorkerClient()
+  }
+
+  const { default: OnnxRuntimeWorker } = await import('./onnxRuntimeWorkerFactory.js')
+  return new BrowserRuntimeWorkerClient(new OnnxRuntimeWorker())
 }
 
-function resolveInputName(inputNames: readonly string[], preferredName: string): string {
-  return resolveTensorName(inputNames, preferredName, '输入')
+type WorkerRequest =
+  | (RuntimeWorkerInitOptions & { type: 'init'; requestId: number })
+  | { type: 'run'; requestId: number; inputData: Float32Array; fetchNames: readonly string[] }
+  | { type: 'release'; requestId: number }
+
+type WorkerResponse =
+  | { type: 'success'; requestId: number; result: unknown }
+  | { type: 'error'; requestId: number; message: string }
+
+class BrowserRuntimeWorkerClient implements RuntimeWorkerClient {
+  private readonly worker: Worker
+  private readonly pendingRequests = new Map<number, {
+    resolve: (value: unknown) => void
+    reject: (error: Error) => void
+  }>()
+  private nextRequestId = 1
+  private terminated = false
+
+  constructor(worker: Worker) {
+    this.worker = worker
+
+    this.worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+      const pendingRequest = this.pendingRequests.get(event.data.requestId)
+      if (!pendingRequest) {
+        return
+      }
+
+      this.pendingRequests.delete(event.data.requestId)
+      if (event.data.type === 'error') {
+        pendingRequest.reject(new Error(event.data.message))
+        return
+      }
+
+      pendingRequest.resolve(event.data.result)
+    }
+
+    this.worker.onerror = (event: ErrorEvent) => {
+      this.rejectAll(new Error(event.message || 'ONNX Runtime Worker 执行失败。'))
+    }
+
+    this.worker.onmessageerror = () => {
+      this.rejectAll(new Error('ONNX Runtime Worker 消息传递失败。'))
+    }
+  }
+
+  init(options: RuntimeWorkerInitOptions): Promise<RuntimeWorkerSessionMetadata> {
+    const bytes = options.bytes.slice()
+    return this.post<RuntimeWorkerSessionMetadata>({
+      type: 'init',
+      requestId: this.nextRequestId++,
+      ...options,
+      bytes,
+    }, [bytes.buffer])
+  }
+
+  run(inputData: Float32Array, fetchNames: readonly string[]): Promise<Record<string, TensorLike>> {
+    const inputDataCopy = inputData.slice()
+    return this.post<Record<string, TensorLike>>({
+      type: 'run',
+      requestId: this.nextRequestId++,
+      inputData: inputDataCopy,
+      fetchNames: [...fetchNames],
+    }, [inputDataCopy.buffer])
+  }
+
+  release(): Promise<void> {
+    if (this.terminated) {
+      return Promise.resolve()
+    }
+
+    return this.post<void>({
+      type: 'release',
+      requestId: this.nextRequestId++,
+    }, [])
+  }
+
+  terminate() {
+    if (this.terminated) {
+      return
+    }
+
+    this.terminated = true
+    this.worker.terminate()
+    this.rejectAll(new Error('ONNX Runtime Worker 已终止。'))
+  }
+
+  private post<T>(request: WorkerRequest, transfers: Transferable[]): Promise<T> {
+    if (this.terminated) {
+      return Promise.reject(new Error('ONNX Runtime Worker 已终止。'))
+    }
+
+    return new Promise<T>((resolve, reject) => {
+      this.pendingRequests.set(request.requestId, {
+        resolve: (value) => resolve(value as T),
+        reject,
+      })
+      try {
+        this.worker.postMessage(request, transfers)
+      } catch (error) {
+        this.pendingRequests.delete(request.requestId)
+        reject(error instanceof Error ? error : new Error(String(error)))
+      }
+    })
+  }
+
+  private rejectAll(error: Error) {
+    for (const pendingRequest of this.pendingRequests.values()) {
+      pendingRequest.reject(error)
+    }
+    this.pendingRequests.clear()
+  }
 }
 
 function resolveRequestedOutputNames(
@@ -319,21 +467,14 @@ function prepareInput(
   sessionState: SessionState,
   source: CanvasImageSource,
   contract: ResolvedModelContract,
-): PreparedInput {
+): PreprocessedImageGeometry {
   const geometry = drawPreprocessedImage(sessionState.preprocessContext, source, contract)
   const targetWidth = contract.preprocess.imageWidth
   const targetHeight = contract.preprocess.imageHeight
   const imageData = sessionState.preprocessContext.getImageData(0, 0, targetWidth, targetHeight)
   writeTensorData(sessionState.inputData, imageData.data, targetWidth * targetHeight)
 
-  if (sessionState.inputGpuBuffer && sessionState.gpuDevice) {
-    sessionState.gpuDevice.queue.writeBuffer(sessionState.inputGpuBuffer, 0, sessionState.inputData)
-  }
-
-  return {
-    tensor: sessionState.inputTensor,
-    geometry,
-  }
+  return geometry
 }
 
 function writeTensorData(
@@ -347,27 +488,6 @@ function writeTensorData(
     target[channelSize + index] = source[pixelOffset + 1] / 255
     target[channelSize * 2 + index] = source[pixelOffset + 2] / 255
   }
-}
-
-async function normalizeOutputs(
-  outputMap: ort.InferenceSession.ReturnType,
-): Promise<Record<string, TensorLike>> {
-  const entries = await Promise.all(
-    Object.entries(outputMap).map(async ([name, value]) => {
-      const tensor = value as ort.Tensor
-      const rawData = typeof tensor.getData === 'function'
-        ? await tensor.getData(true)
-        : tensor.data
-      const data = ensureNumericTensorData(rawData, name)
-
-      return [name, {
-        dims: [...tensor.dims],
-        data,
-      } satisfies TensorLike] as const
-    }),
-  )
-
-  return Object.fromEntries(entries)
 }
 
 async function loadImageCanvas(file: File): Promise<HTMLCanvasElement> {
@@ -418,21 +538,13 @@ function captureSourceFrame(
   canvas.height = height
   const context = get2dContext(canvas)
 
-  if (source instanceof HTMLCanvasElement && source === canvas) {
+  if (typeof HTMLCanvasElement !== 'undefined' && source instanceof HTMLCanvasElement && source === canvas) {
     return canvas
   }
 
   context.clearRect(0, 0, width, height)
   context.drawImage(source, 0, 0, width, height)
   return canvas
-}
-
-function ensureNumericTensorData(data: ort.Tensor['data'], outputName: string): ArrayLike<number> {
-  if (Array.isArray(data)) {
-    throw new Error(`输出 ${outputName} 不是数值 tensor。`)
-  }
-
-  return data as ArrayLike<number>
 }
 
 function drawDetections(
@@ -527,22 +639,22 @@ function drawPreprocessedImage(
 }
 
 function resolveSourceDimensions(source: CanvasImageSource): { width: number; height: number } {
-  if (source instanceof HTMLVideoElement) {
+  if (typeof HTMLVideoElement !== 'undefined' && source instanceof HTMLVideoElement) {
     return {
       width: source.videoWidth || source.clientWidth,
       height: source.videoHeight || source.clientHeight,
     }
   }
 
-  if (source instanceof HTMLCanvasElement) {
+  if (typeof HTMLCanvasElement !== 'undefined' && source instanceof HTMLCanvasElement) {
     return { width: source.width, height: source.height }
   }
 
-  if (source instanceof ImageBitmap) {
+  if (typeof ImageBitmap !== 'undefined' && source instanceof ImageBitmap) {
     return { width: source.width, height: source.height }
   }
 
-  if (source instanceof HTMLImageElement) {
+  if (typeof HTMLImageElement !== 'undefined' && source instanceof HTMLImageElement) {
     return {
       width: source.naturalWidth || source.width,
       height: source.naturalHeight || source.height,
