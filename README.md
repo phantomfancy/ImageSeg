@@ -105,6 +105,55 @@ aspire do docker-compose-down-env
 - 当前仓库内建并验证的官方路径是 Docker Compose。
 - 如果你本地主要使用 Podman，建议先执行 `npm run publish`，再手动消费 `aspire-output/` 中的 Compose 产物；本仓库当前不再承诺 `npm run deploy` 对 Podman 的自动兼容。
 
+## 静态站点容器部署（Podman）
+
+当前 `apphost.ts` 中的 `addViteApp(...)` 仍主要面向开发期编排；如果目标是先把前端静态站点单独部署起来，优先使用 `web-app/frontend/Dockerfile` + Nginx 容器。
+
+前提：
+
+- `podman machine` 已启动且 `podman info` 可正常返回
+- 已在仓库根目录执行 `npm install`
+
+如 Podman 仍处于 `Currently starting` 或 socket 拒绝连接，可先执行：
+
+```powershell
+wsl --terminate podman-machine-default
+podman machine start
+podman info
+```
+
+构建静态镜像：
+
+```powershell
+npm run static:image
+```
+
+启动本地静态站点容器：
+
+```powershell
+npm run static:run
+```
+
+默认访问地址：
+
+- `http://localhost:8080/`
+
+校验 ONNX Runtime 静态资源是否就绪：
+
+- `http://localhost:8080/ort/ort-wasm-simd-threaded.asyncify.wasm`
+
+停止容器：
+
+```powershell
+npm run static:stop
+```
+
+说明：
+
+- 当前静态容器部署按根路径 `/` 提供服务，不支持 `/4c/` 这类子路径挂载。
+- ONNX 模型文件仍由浏览器本地导入，不会打包进镜像。
+- 如果需要通过 HTTPS 或反向代理对外发布，可在此基础上继续扩展 Nginx 配置。
+
 构建：
 
 ```powershell

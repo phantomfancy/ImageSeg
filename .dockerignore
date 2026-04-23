@@ -1,0 +1,9 @@
+.git/
+.modules/
+.npm-cache/
+aspire-output/
+node_modules/
+pytorch-training/
+web-app/**/node_modules/
+web-app/**/dist/
+web-app/**/dist-ssr/

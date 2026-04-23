@@ -73,6 +73,29 @@ npm run deploy
 aspire do docker-compose-down-env
 ```
 
+如果需要优先跑通前端静态站点部署，可改用 Podman + Nginx 容器：
+
+```powershell
+podman info
+npm run static:image
+npm run static:run
+```
+
+默认访问地址为 `http://localhost:8080/`。
+如果 `podman info` 失败，先尝试：
+
+```powershell
+wsl --terminate podman-machine-default
+podman machine start
+podman info
+```
+
+停止静态站点容器：
+
+```powershell
+npm run static:stop
+```
+
 构建：
 
 ```powershell
