@@ -1,7 +1,9 @@
-import { type RefObject } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import helpIcon from '../assets/help-circle.svg?raw'
+import moonIcon from '../assets/moon.svg?raw'
+import sunIcon from '../assets/sun.svg?raw'
 import styled from 'styled-components'
-import { PAGE_NAV_ITEMS } from '../app/constants'
-import type { PageId, ThemeMode } from '../app/types'
+import type { PageId, ResolvedTheme, ThemeMode } from '../app/types'
 import { SvgIcon } from './SvgIcon'
 
 const Root = styled.header`
@@ -213,34 +215,72 @@ const Root = styled.header`
   }
 `
 
+const PAGE_NAV_ITEMS: ReadonlyArray<{ id: PageId; label: string }> = [
+  { id: 'home', label: '首页' },
+  { id: 'workspace', label: '工作台' },
+]
+
+const THEME_OPTIONS: ReadonlyArray<{ mode: ThemeMode; label: string }> = [
+  { mode: 'dark', label: '深色' },
+  { mode: 'light', label: '浅色' },
+  { mode: 'system', label: '跟随系统' },
+]
+
 type TopBarProps = {
   activePageId: PageId
-  currentThemeIcon: string
-  currentThemeLabel: string
-  helpIconMarkup: string
-  isThemeMenuOpen: boolean
   onHelpOpen: () => void
   onPageNavigate: (pageId: PageId) => void
-  onThemeMenuToggle: () => void
   onThemeModeSelect: (mode: ThemeMode) => void
-  themeMenuRef: RefObject<HTMLDivElement | null>
+  resolvedTheme: ResolvedTheme
   themeMode: ThemeMode
 }
 
 export function TopBar(props: TopBarProps) {
+  const [isThemeMenuOpen, setIsThemeMenuOpen] = useState(false)
+  const themeMenuRef = useRef<HTMLDivElement | null>(null)
   const {
     activePageId,
-    currentThemeIcon,
-    currentThemeLabel,
-    helpIconMarkup,
-    isThemeMenuOpen,
     onHelpOpen,
     onPageNavigate,
-    onThemeMenuToggle,
     onThemeModeSelect,
-    themeMenuRef,
+    resolvedTheme,
     themeMode,
   } = props
+  const currentThemeIcon = resolvedTheme === 'dark' ? moonIcon : sunIcon
+  const currentThemeLabel = themeMode === 'system'
+    ? `跟随系统 · ${resolvedTheme === 'dark' ? '深色' : '浅色'}`
+    : themeMode === 'dark'
+      ? '深色模式'
+      : '浅色模式'
+
+  useEffect(() => {
+    if (!isThemeMenuOpen) {
+      return
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (themeMenuRef.current?.contains(event.target as Node)) {
+        return
+      }
+
+      setIsThemeMenuOpen(false)
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') {
+        return
+      }
+
+      setIsThemeMenuOpen(false)
+    }
+
+    window.addEventListener('pointerdown', handlePointerDown)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isThemeMenuOpen])
 
   return (
     <Root>
@@ -256,6 +296,7 @@ export function TopBar(props: TopBarProps) {
             className={`topbar__nav-item${activePageId === item.id ? ' topbar__nav-item--active' : ''}`}
             aria-current={activePageId === item.id ? 'page' : undefined}
             onClick={() => {
+              setIsThemeMenuOpen(false)
               onPageNavigate(item.id)
             }}
           >
@@ -273,7 +314,9 @@ export function TopBar(props: TopBarProps) {
             aria-expanded={isThemeMenuOpen}
             aria-label={`主题切换，当前为${currentThemeLabel}`}
             title={`主题切换，当前为${currentThemeLabel}`}
-            onClick={onThemeMenuToggle}
+            onClick={() => {
+              setIsThemeMenuOpen((currentValue) => !currentValue)
+            }}
           >
             <SvgIcon markup={currentThemeIcon} />
             <span>主题</span>
@@ -281,11 +324,7 @@ export function TopBar(props: TopBarProps) {
 
           {isThemeMenuOpen ? (
             <div className="topbar__menu" role="menu" aria-label="主题切换">
-              {([
-                ['dark', '深色'],
-                ['light', '浅色'],
-                ['system', '跟随系统'],
-              ] as const).map(([mode, label]) => (
+              {THEME_OPTIONS.map(({ mode, label }) => (
                 <button
                   key={mode}
                   type="button"
@@ -294,6 +333,7 @@ export function TopBar(props: TopBarProps) {
                   className={`topbar__menu-item${themeMode === mode ? ' topbar__menu-item--active' : ''}`}
                   onClick={() => {
                     onThemeModeSelect(mode)
+                    setIsThemeMenuOpen(false)
                   }}
                 >
                   <span>{label}</span>
@@ -309,9 +349,12 @@ export function TopBar(props: TopBarProps) {
           className="topbar__action-button"
           aria-label="帮助说明"
           title="帮助说明"
-          onClick={onHelpOpen}
+          onClick={() => {
+            setIsThemeMenuOpen(false)
+            onHelpOpen()
+          }}
         >
-          <SvgIcon markup={helpIconMarkup} />
+          <SvgIcon markup={helpIcon} />
           <span>帮助</span>
         </button>
       </div>

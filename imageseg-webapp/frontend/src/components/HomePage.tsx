@@ -207,6 +207,32 @@ const Root = styled.div`
   }
 `
 
+const HERO_BADGE_TEXT = 'ImageSeg-基于onnx的视觉推理工作台'
+
+const HERO_SIGNAL_ITEMS = [
+  { label: '输入源', value: '图片 / 视频 / 摄像头' },
+  { label: '推理后端', value: 'ONNX Runtime WebGPU' },
+  { label: '模型契约', value: '统一解码与预处理' },
+] as const
+
+const HOME_FEATURE_ITEMS = [
+  {
+    index: '01',
+    title: '纯前端推理',
+    body: '输入源、ONNX 会话、结果绘制和导出都在浏览器端完成，减少服务端部署依赖。',
+  },
+  {
+    index: '02',
+    title: '统一模型输出',
+    body: '通过 Contracts 统一不同检测模型的预处理、输出签名和解码逻辑，降低模型切换成本。',
+  },
+  {
+    index: '03',
+    title: '结果复核与导出',
+    body: '同一预览区支持输入源和叠加结果切换，图像查看器可缩放、平移并复核框选细节。',
+  },
+] as const
+
 type HomePageProps = {
   onEnterWorkspace: () => void
   onHelpOpen: () => void
@@ -217,7 +243,7 @@ export function HomePage(props: HomePageProps) {
     <Root>
       <section className="hero hero--home">
         <div className="hero__content">
-          <div className="hero__eyebrow">ImageSeg-基于onnx的视觉推理工作台</div>
+          <div className="hero__eyebrow">{HERO_BADGE_TEXT}</div>
           <h1>基于onnx的视觉推理工作台</h1>
           <p className="hero__copy">
             面向单图、视频与摄像头场景的本地 ONNX 推理工作台，使用基于CNN或Transformers的目标检测模型进行图像推理。
@@ -242,37 +268,23 @@ export function HomePage(props: HomePageProps) {
         </div>
 
         <div className="hero__signal" aria-label="当前能力摘要">
-          <div className="hero__signal-card">
-            <span className="hero__signal-label">输入源</span>
-            <strong>图片 / 视频 / 摄像头</strong>
-          </div>
-          <div className="hero__signal-card">
-            <span className="hero__signal-label">推理后端</span>
-            <strong>ONNX Runtime WebGPU</strong>
-          </div>
-          <div className="hero__signal-card">
-            <span className="hero__signal-label">模型契约</span>
-            <strong>统一解码与预处理</strong>
-          </div>
+          {HERO_SIGNAL_ITEMS.map((item) => (
+            <div key={item.label} className="hero__signal-card">
+              <span className="hero__signal-label">{item.label}</span>
+              <strong>{item.value}</strong>
+            </div>
+          ))}
         </div>
       </section>
 
       <section className="home-grid" aria-label="首页功能概览">
-        <article className="home-card">
-          <div className="home-card__index">01</div>
-          <h2>纯前端推理</h2>
-          <p>输入源、ONNX 会话、结果绘制和导出都在浏览器端完成，减少服务端部署依赖。</p>
-        </article>
-        <article className="home-card">
-          <div className="home-card__index">02</div>
-          <h2>统一模型输出</h2>
-          <p>通过 Contracts 统一不同检测模型的预处理、输出签名和解码逻辑，降低模型切换成本。</p>
-        </article>
-        <article className="home-card">
-          <div className="home-card__index">03</div>
-          <h2>结果复核与导出</h2>
-          <p>同一预览区支持输入源和叠加结果切换，图像查看器可缩放、平移并复核框选细节。</p>
-        </article>
+        {HOME_FEATURE_ITEMS.map((item) => (
+          <article key={item.index} className="home-card">
+            <div className="home-card__index">{item.index}</div>
+            <h2>{item.title}</h2>
+            <p>{item.body}</p>
+          </article>
+        ))}
       </section>
     </Root>
   )

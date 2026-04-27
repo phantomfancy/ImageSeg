@@ -1,11 +1,4 @@
 import styled from 'styled-components'
-import {
-  FOOTER_CERTIFICATION_INFO,
-  FOOTER_CONTACT_EMAIL,
-  FOOTER_FILING_NUMBER,
-  PROJECT_LICENSE_URL,
-  PROJECT_REPOSITORY_URL,
-} from '../app/constants'
 
 const Root = styled.footer`
   display: grid;
@@ -117,16 +110,19 @@ const Root = styled.footer`
   }
 `
 
-type FooterProps = {
-  copyrightText: string
-}
+const PROJECT_REPOSITORY_URL = 'https://github.com/phantomfancy/ImageSeg'
+const PROJECT_LICENSE_URL = `${PROJECT_REPOSITORY_URL}/blob/main/LICENSE`
+const FOOTER_CONTACT_EMAIL = 'phantomfancy@outlook.com'
+const FOOTER_FILING_NUMBER = '备案号待补充'
+const FOOTER_CERTIFICATION_INFO = '认证信息待补充'
+const COPYRIGHT_TEXT = `Copyright © ${new Date().getFullYear()} phantomfancy`
 
-export function Footer(props: FooterProps) {
+export function Footer() {
   return (
     <Root>
       <div className="footer__section footer__section--brand">
         <div className="footer__title">ImageSeg-基于onnx的视觉推理工作台</div>
-        <p className="footer__copy">{props.copyrightText}</p>
+        <p className="footer__copy">{COPYRIGHT_TEXT}</p>
         <p className="footer__copy">项目源码依据 AGPL-3.0 许可进行分发与修改。</p>
       </div>
 

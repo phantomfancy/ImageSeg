@@ -2,24 +2,13 @@ import {
   CONFIG_FILE_NAME,
   PREPROCESSOR_CONFIG_FILE_NAME,
 } from '../lib/modelPackage'
-import type { HelpContentItem, PageId, WorkspaceNavItem } from './types'
-
-export const PAGE_NAV_ITEMS: ReadonlyArray<{ id: PageId; label: string }> = [
-  { id: 'home', label: '首页' },
-  { id: 'workspace', label: '工作台' },
-]
+import type { HelpContentItem, WorkspaceNavItem } from './types'
 
 export const NAV_ITEMS: ReadonlyArray<WorkspaceNavItem> = [
   { id: 'input-import', label: '输入与导入', description: '输入源、模型与配置' },
   { id: 'inference-settings', label: '推理设置', description: '阈值、数量与执行控制' },
   { id: 'results-export', label: '结果与导出', description: '预览、结果与导出入口' },
 ]
-
-export const PROJECT_REPOSITORY_URL = 'https://github.com/phantomfancy/ImageSeg'
-export const PROJECT_LICENSE_URL = `${PROJECT_REPOSITORY_URL}/blob/main/LICENSE`
-export const FOOTER_CONTACT_EMAIL = 'phantomfancy@outlook.com'
-export const FOOTER_FILING_NUMBER = '备案号待补充'
-export const FOOTER_CERTIFICATION_INFO = '认证信息待补充'
 
 export const HELP_CONTENT: ReadonlyArray<HelpContentItem> = [
   {
