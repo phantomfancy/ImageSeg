@@ -18,12 +18,12 @@
     "static:run": "podman run --rm --name 4cimageseg-static -p 8080:80 4cimageseg-static:local",
     "static:stop": "podman rm -f 4cimageseg-static",
     "restore:aspire": "aspire restore",
-    "typecheck": "tsgo -p ./tsconfig.json --noEmit && npm run typecheck --workspace @4cimageseg/frontend && npm run typecheck --workspace @4cimageseg/contracts",
+    "typecheck": "tsgo -p ./imageseg-webapp/tsconfig.root-tools.json --noEmit && npm run typecheck --workspace @4cimageseg/frontend && npm run typecheck --workspace @4cimageseg/contracts",
     "build": "npm run build --workspace @4cimageseg/contracts && npm run build --workspace @4cimageseg/frontend",
     "lint": "npm run lint --workspace @4cimageseg/frontend",
     "test:contracts": "npm run test --workspace @4cimageseg/contracts",
     "test:frontend": "npm run test --workspace @4cimageseg/frontend",
-    "verify:training-models": "node --experimental-strip-types ./scripts/verify-training-models.ts",
+    "verify:training-models": "node --experimental-strip-types ./imageseg-webapp/scripts/verify-training-models.ts",
     "test": "npm run test:contracts && npm run test:frontend && npm run verify:training-models"
   },
   "devDependencies": {

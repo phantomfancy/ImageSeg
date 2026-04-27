@@ -1,6 +1,6 @@
 {
   "appHost": {
-    "path": "apphost.ts",
+    "path": "imageseg-webapp/apphost.ts",
     "language": "typescript/nodejs"
   },
   "sdk": {

@@ -12,7 +12,7 @@
 
 ## 当前结构
 
-- `apphost.ts`：根目录 Aspire TS AppHost
+- `imageseg-webapp/apphost.ts`：Aspire TS AppHost 实现入口
 - `imageseg-webapp/contracts`：纯 TypeScript 模型契约包
 - `imageseg-webapp/frontend`：React 19 + TS/TSX 前端
 - `imageseg-training/`：训练脚本、数据与导出模型
@@ -25,7 +25,7 @@
 npm install
 ```
 
-`aspire run` 会直接执行根目录 `apphost.ts`，因此根目录 `node_modules` 必须包含 AppHost 运行时依赖；如果出现 `Cannot find package 'vscode-jsonrpc' imported from .modules\\transport.ts`，先重新执行一次 `npm install`。
+`aspire run` 会通过根目录 `aspire.config.json` 加载 `imageseg-webapp/apphost.ts`，因此根目录 `node_modules` 必须包含 AppHost 运行时依赖；如果出现 `Cannot find package 'vscode-jsonrpc' imported from .modules\\transport.ts`，先重新执行一次 `npm install`。
 
 生成 Aspire TS SDK：
 
@@ -103,7 +103,7 @@ aspire do docker-compose-down-env
 
 ## 静态站点容器部署（Podman）
 
-当前 `apphost.ts` 中的 `addViteApp(...)` 仍主要面向开发期编排；如果目标是先把前端静态站点单独部署起来，优先使用 `imageseg-webapp/frontend/Dockerfile` + Nginx 容器。
+当前 `imageseg-webapp/apphost.ts` 中的 `addViteApp(...)` 仍主要面向开发期编排；如果目标是先把前端静态站点单独部署起来，优先使用 `imageseg-webapp/frontend/Dockerfile` + Nginx 容器。
 
 前提：
 
@@ -166,7 +166,7 @@ npm run test
 
 - `imageseg-webapp/frontend/public/ort` 是由 `npm run prepare:ort` 从 `onnxruntime-web` 复制生成的前端运行时资产目录，不需要提交到版本库。
 - `npm run test` 中的 `npm run test:frontend` 与 `npm run verify:training-models` 依赖 `imageseg-training/training_result` 下的测试模型文件集。如果当前机器没有准备 `imageseg-training/training_result`，这两项检查会因找不到 `.onnx` / `config.json` / `preprocessor_config.json` 而失败，这属于预期行为，不代表前端类型检查、`tsgo` 迁移或构建链本身存在问题。
-- `npm run publish` / `npm run deploy` 依赖 `apphost.ts` 中已经声明 Docker Compose 部署环境，并依赖 `aspire.config.json` 中已包含 `Aspire.Hosting.Docker`。
+- `npm run publish` / `npm run deploy` 依赖 `imageseg-webapp/apphost.ts` 中已经声明 Docker Compose 部署环境，并依赖 `aspire.config.json` 中已包含 `Aspire.Hosting.Docker`。
 - 在未准备该目录时，可先使用下面的命令验证不依赖训练产物的部分：
 
 ```powershell
@@ -189,7 +189,7 @@ Failed to find kernel for Cast(13) ... the node in the model has the following t
 
 当前已验证可用的处理方式如下：
 
-1. 使用 `scripts/remove_back_to_back_cast.py` 脚本，来源于 [remove_back_to_back_cast.py](https://github.com/guschmue/ort-web-perf/blob/master/remove_back_to_back_cast.py)
+1. 使用 [remove_back_to_back_cast.py](https://github.com/guschmue/ort-web-perf/blob/master/remove_back_to_back_cast.py) 脚本 
 2. 使用脚本转换原始模型，例如：
 
 ```powershell

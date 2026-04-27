@@ -5,7 +5,7 @@ import path from 'node:path'
 import {
   finalizeModelImport,
   inspectOnnxModelFile,
-} from '../imageseg-webapp/frontend/src/lib/modelPackage.ts'
+} from '../frontend/src/lib/modelPackage.ts'
 
 const trainingResultDirectory = path.resolve('imageseg-training', 'training_result')
 

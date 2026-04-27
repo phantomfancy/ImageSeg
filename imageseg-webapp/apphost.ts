@@ -5,7 +5,7 @@ const builder = await createBuilder()
 await builder.addDockerComposeEnvironment('env')
 
 const frontend = await builder
-  .addViteApp('frontend', './imageseg-webapp/frontend')
+  .addViteApp('frontend', './frontend')
   .withNpm()
   .withExternalHttpEndpoints()
 

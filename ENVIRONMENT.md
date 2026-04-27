@@ -13,7 +13,7 @@ npm --version
 
 ## 2. Aspire CLI
 
-安装 Aspire CLI，并确认版本为 `13.2+`，因为 `apphost.ts` 依赖 TypeScript AppHost 支持：
+安装 Aspire CLI，并确认版本为 `13.2+`，因为 `imageseg-webapp/apphost.ts` 依赖 TypeScript AppHost 支持：
 
 ```powershell
 irm https://aspire.dev/install.ps1 | iex
@@ -41,7 +41,7 @@ npm install
 aspire restore
 ```
 
-`aspire restore` 会根据根目录 `aspire.config.json` 生成 `.modules/`。
+`aspire restore` 会根据根目录 `aspire.config.json` 生成 `.modules/`，并由该配置指向 `imageseg-webapp/apphost.ts`。
 当 `aspire.config.json` 中新增或升级 Aspire 包时，也要重新执行一次 `aspire restore`。
 如果随后执行 `aspire run` 时提示 `.modules\\transport.ts` 缺少 `vscode-jsonrpc`，说明根目录依赖未安装完整，重新在仓库根目录执行 `npm install` 即可。
 
