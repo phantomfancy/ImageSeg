@@ -3,7 +3,7 @@
 .npm-cache/
 aspire-output/
 node_modules/
-pytorch-training/
-web-app/**/node_modules/
-web-app/**/dist/
-web-app/**/dist-ssr/
+imageseg-training/
+imageseg-webapp/**/node_modules/
+imageseg-webapp/**/dist/
+imageseg-webapp/**/dist-ssr/

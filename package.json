@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "workspaces": [
-    "web-app/contracts",
-    "web-app/frontend"
+    "imageseg-webapp/contracts",
+    "imageseg-webapp/frontend"
   ],
   "dependencies": {
     "vscode-jsonrpc": "^8.2.1"
@@ -14,7 +14,7 @@
     "dev": "aspire run",
     "publish": "aspire publish",
     "deploy": "aspire deploy",
-    "static:image": "podman build -f web-app/frontend/Dockerfile -t 4cimageseg-static:local .",
+    "static:image": "podman build -f imageseg-webapp/frontend/Dockerfile -t 4cimageseg-static:local .",
     "static:run": "podman run --rm --name 4cimageseg-static -p 8080:80 4cimageseg-static:local",
     "static:stop": "podman rm -f 4cimageseg-static",
     "restore:aspire": "aspire restore",

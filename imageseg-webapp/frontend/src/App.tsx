@@ -80,11 +80,11 @@ const NAV_ITEMS: ReadonlyArray<{ id: SectionId; label: string; description: stri
 ]
 
 const PROJECT_REPOSITORY_URL = 'https://github.com/phantomfancy/ImageSeg'
-const PROJECT_LICENSE_URL = `${PROJECT_REPOSITORY_URL}/blob/master/LICENSE`
-const FOOTER_CONTACT_EMAIL = 'contact@4cimageseg.local'
+const PROJECT_LICENSE_URL = `${PROJECT_REPOSITORY_URL}/blob/main/LICENSE`
+const FOOTER_CONTACT_EMAIL = 'phantomfancy@outlook.com'
 const FOOTER_FILING_NUMBER = '备案号待补充'
 const FOOTER_CERTIFICATION_INFO = '认证信息待补充'
-const FOOTER_COPYRIGHT_TEXT = `Copyright © ${new Date().getFullYear()} ★ASU-全域智侦`
+const FOOTER_COPYRIGHT_TEXT = `Copyright © ${new Date().getFullYear()} phantomfancy`
 const HELP_CONTENT: ReadonlyArray<{ title: string; body: string }> = [
   {
     title: '输入模式',
@@ -1464,7 +1464,7 @@ function App() {
       <div className="page-layout">
         <header className="topbar">
           <div className="topbar__brand">
-            <div className="topbar__title">ImageSeg-ai装备识别工具</div>
+            <div className="topbar__title">ImageSeg-基于onnx的视觉推理工作台</div>
           </div>
 
           <nav className="topbar__page-nav" aria-label="页面导航">
@@ -1548,11 +1548,11 @@ function App() {
               <div className="home-page">
                 <section className="hero hero--home">
                   <div className="hero__content">
-                    <div className="hero__eyebrow">ImageSeg-ai装备识别工具</div>
-                    <h1>ai装备识别工具</h1>
+                    <div className="hero__eyebrow">ImageSeg-基于onnx的视觉推理工作台</div>
+                    <h1>基于onnx的视觉推理工作台</h1>
                     <p className="hero__copy">
                       面向单图、视频与摄像头场景的本地 ONNX 推理工作台，使用基于CNN或Transformers的目标检测模型进行图像推理。
-                      导入、推理编排、结果解码和导出全部在前端完成，适合快速验证装备识别模型。
+                      导入、推理编排、结果解码和导出全部在前端完成，适合快速验证识别模型。
                     </p>
                     <div className="hero__actions">
                       <button
@@ -2081,7 +2081,7 @@ function App() {
 
         <footer className="footer">
           <div className="footer__section footer__section--brand">
-            <div className="footer__title">ImageSeg-ai装备识别工具</div>
+            <div className="footer__title">ImageSeg-基于onnx的视觉推理工作台</div>
             <p className="footer__copy">{FOOTER_COPYRIGHT_TEXT}</p>
             <p className="footer__copy">项目源码依据 AGPL-3.0 许可进行分发与修改。</p>
           </div>

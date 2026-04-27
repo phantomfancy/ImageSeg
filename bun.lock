@@ -12,7 +12,7 @@
         "tsx": "^4.21.0",
       },
     },
-    "web-app/contracts": {
+    "imageseg-webapp/contracts": {
       "name": "@4cimageseg/contracts",
       "version": "0.1.0",
       "devDependencies": {
@@ -20,7 +20,7 @@
         "typescript": "~6.0.2",
       },
     },
-    "web-app/frontend": {
+    "imageseg-webapp/frontend": {
       "name": "@4cimageseg/frontend",
       "version": "0.0.0",
       "dependencies": {
@@ -45,9 +45,9 @@
     },
   },
   "packages": {
-    "@4cimageseg/contracts": ["@4cimageseg/contracts@workspace:web-app/contracts"],
+    "@4cimageseg/contracts": ["@4cimageseg/contracts@workspace:imageseg-webapp/contracts"],
 
-    "@4cimageseg/frontend": ["@4cimageseg/frontend@workspace:web-app/frontend"],
+    "@4cimageseg/frontend": ["@4cimageseg/frontend@workspace:imageseg-webapp/frontend"],
 
     "@babel/code-frame": ["@babel/code-frame@7.29.0", "", { "dependencies": { "@babel/helper-validator-identifier": "^7.28.5", "js-tokens": "^4.0.0", "picocolors": "^1.1.1" } }, ""],
 
@@ -510,3 +510,4 @@
     "@typescript-eslint/typescript-estree/minimatch/brace-expansion/balanced-match": ["balanced-match@4.0.4", "", {}, ""],
   }
 }
+

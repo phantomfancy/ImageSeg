@@ -11,14 +11,14 @@
 .npm-*/
 .modules/
 aspire-output/
-web-app/frontend/src/lib/onnxProtoSource.generated.ts
-web-app/frontend/public/ort/
+imageseg-webapp/frontend/src/lib/onnxProtoSource.generated.ts
+imageseg-webapp/frontend/public/ort/
 *.onnx
 *.pt
 dataset*/
 runs/
-pytorch-trainin/dataset*
-pytorch-training/runs
+imageseg-training/dataset*
+imageseg-training/runs
 
 # User-specific files
 *.rsuser

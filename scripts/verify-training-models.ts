@@ -5,9 +5,9 @@ import path from 'node:path'
 import {
   finalizeModelImport,
   inspectOnnxModelFile,
-} from '../web-app/frontend/src/lib/modelPackage.ts'
+} from '../imageseg-webapp/frontend/src/lib/modelPackage.ts'
 
-const trainingResultDirectory = path.resolve('pytorch-training', 'training_result')
+const trainingResultDirectory = path.resolve('imageseg-training', 'training_result')
 
 type VerificationCase = {
   onnx: string

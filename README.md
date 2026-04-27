@@ -1,25 +1,13 @@
 # ImageSeg
 
-`ImageSeg-ai装备识别工具` 使用 `React 19 + TypeScript + ONNX Runtime Web/WebGPU + Aspire TypeScript AppHost` 架构，具有使用ultralytics格式或者hf格式模型进行图像识别推理的功能，并且开发了针对装备识别的额外功能。整个项目具有技术架构新和创新功能多的特点，同时应用功能完善、代码格式扎实。
+`ImageSeg-基于onnx的视觉推理工作台` 使用 `React 19 + TypeScript + ONNX Runtime Web/WebGPU + Aspire TypeScript AppHost` 架构，具有使用ultralytics格式或者hf格式模型进行图像识别推理的功能。整个项目具有技术架构新和创新功能多的特点，同时应用功能完善、代码格式扎实。
 
 ## 当前结构
 
 - `apphost.ts`：根目录 Aspire TS AppHost
-- `web-app/contracts`：纯 TypeScript 模型契约包
-- `web-app/frontend`：React 19 + TS/TSX 前端
-- `pytorch-training/`：训练脚本、数据与导出模型
-
-## 当前目标
-
-`Contracts` 负责统一同为 ONNX 但输出格式不同的检测模型，当前优先支持：
-
-- `ultralytics-yolo-detect`
-- `ultralytics-rtdetr`
-- `hf-detr-like`
-
-成功标志：
-
-- `pytorch-training/training_result` 下的所有 ONNX 模型都能被前端导入逻辑识别出契约 family
+- `imageseg-webapp/contracts`：纯 TypeScript 模型契约包
+- `imageseg-webapp/frontend`：React 19 + TS/TSX 前端
+- `imageseg-training/`：训练脚本、数据与导出模型
 
 ## 常用命令
 
@@ -50,7 +38,7 @@ npm run dev
 如果只想单独启动前端 Vite 开发服务器，可使用以下任一方式：
 
 ```powershell
-cd .\web-app\frontend
+cd .\imageseg-webapp\frontend
 npm run dev
 ```
 
@@ -107,7 +95,7 @@ aspire do docker-compose-down-env
 
 ## 静态站点容器部署（Podman）
 
-当前 `apphost.ts` 中的 `addViteApp(...)` 仍主要面向开发期编排；如果目标是先把前端静态站点单独部署起来，优先使用 `web-app/frontend/Dockerfile` + Nginx 容器。
+当前 `apphost.ts` 中的 `addViteApp(...)` 仍主要面向开发期编排；如果目标是先把前端静态站点单独部署起来，优先使用 `imageseg-webapp/frontend/Dockerfile` + Nginx 容器。
 
 前提：
 
@@ -168,9 +156,8 @@ npm run test
 
 注意：
 
-- `web-app/frontend/public/ort` 是由 `npm run prepare:ort` 从 `onnxruntime-web` 复制生成的前端运行时资产目录，不需要提交到版本库。
-- `npm run test` 中的 `npm run test:frontend` 与 `npm run verify:training-models` 依赖 `pytorch-training/training_result` 下的测试模型文件集。
-- 如果当前机器没有准备 `pytorch-training/training_result`，这两项检查会因找不到 `.onnx` / `config.json` / `preprocessor_config.json` 而失败，这属于预期行为，不代表前端类型检查、`tsgo` 迁移或构建链本身存在问题。
+- `imageseg-webapp/frontend/public/ort` 是由 `npm run prepare:ort` 从 `onnxruntime-web` 复制生成的前端运行时资产目录，不需要提交到版本库。
+- `npm run test` 中的 `npm run test:frontend` 与 `npm run verify:training-models` 依赖 `imageseg-training/training_result` 下的测试模型文件集。如果当前机器没有准备 `imageseg-training/training_result`，这两项检查会因找不到 `.onnx` / `config.json` / `preprocessor_config.json` 而失败，这属于预期行为，不代表前端类型检查、`tsgo` 迁移或构建链本身存在问题。
 - `npm run publish` / `npm run deploy` 依赖 `apphost.ts` 中已经声明 Docker Compose 部署环境，并依赖 `aspire.config.json` 中已包含 `Aspire.Hosting.Docker`。
 - 在未准备该目录时，可先使用下面的命令验证不依赖训练产物的部分：
 
@@ -194,11 +181,11 @@ Failed to find kernel for Cast(13) ... the node in the model has the following t
 
 当前已验证可用的处理方式如下：
 
-1. 使用`pytorch_training`中`remove_back_to_back_cast.py`脚本, 来源于 [remove_back_to_back_cast.py](https://github.com/guschmue/ort-web-perf/blob/master/remove_back_to_back_cast.py)
+1. 使用`scripts`中`remove_back_to_back_cast.py`脚本, 来源于 [remove_back_to_back_cast.py](https://github.com/guschmue/ort-web-perf/blob/master/remove_back_to_back_cast.py)
 2. 使用脚本转换原始模型，例如：
 
 ```powershell
 python .\remove_back_to_back_cast.py .\rtdetrv2_original_style_hugginface\model_fp16.onnx .\rtdetrv2_original_style_hugginface\model_fp16_encoded.onnx
 ```
 
-3. 在 Web App 中导入转换后的 `model_fp16_encoded.onnx` 进行推理
+然后在 Web App 中导入转换后的 `model_fp16_encoded.onnx` 进行推理。

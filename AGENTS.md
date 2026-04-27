@@ -2,9 +2,9 @@
 
 ## 1. 项目基础信息
 
-- 项目名称：`ImageSeg-ai装备识别工具`
+- 项目名称：`ImageSeg-基于onnx的视觉推理工作台`
 - 技术栈：`ONNX + React 19 + TypeScript + ONNX Runtime Web/WebGPU + Aspire TS AppHost`
-- 项目目标：基于图像的装备识别，优先实现纯前端单图与批量识别，并通过 `Contracts` 统一不同 ONNX 模型输出格式。
+- 项目目标：基于图像的推理识别，优先实现纯前端单图与批量识别，并通过 `Contracts` 统一不同 ONNX 模型输出格式。
 
 ## 2. 环境搭建
 

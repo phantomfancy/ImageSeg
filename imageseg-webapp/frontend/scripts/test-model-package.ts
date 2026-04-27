@@ -15,7 +15,7 @@ import {
 } from '../src/lib/modelPackage.ts'
 
 const scriptDirectory = fileURLToPath(new URL('.', import.meta.url))
-const trainingResultDirectory = path.resolve(scriptDirectory, '..', '..', '..', 'pytorch-training', 'training_result')
+const trainingResultDirectory = path.resolve(scriptDirectory, '..', '..', '..', 'imageseg-training', 'training_result')
 
 class MockDirectoryHandle {
   readonly #files: Map<string, File>
