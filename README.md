@@ -1,5 +1,13 @@
 # ImageSeg
 
+[English README](./README_en.md)
+
+[![GitHub Stars](https://img.shields.io/github/stars/phantomfancy/ImageSeg?style=flat-square)](https://github.com/phantomfancy/ImageSeg/stargazers)
+[![GitHub Forks](https://img.shields.io/github/forks/phantomfancy/ImageSeg?style=flat-square)](https://github.com/phantomfancy/ImageSeg/network/members)
+[![GitHub Issues](https://img.shields.io/github/issues/phantomfancy/ImageSeg?style=flat-square)](https://github.com/phantomfancy/ImageSeg/issues)
+[![GitHub License](https://img.shields.io/github/license/phantomfancy/ImageSeg?style=flat-square)](https://github.com/phantomfancy/ImageSeg/blob/main/LICENSE)
+[![ONNX Runtime](https://img.shields.io/badge/ONNX_Runtime-Web%20%7C%20WebGPU-005CED?style=flat-square)](https://onnxruntime.ai/)
+
 `ImageSeg-基于onnx的视觉推理工作台` 使用 `React 19 + TypeScript + ONNX Runtime Web/WebGPU + Aspire TypeScript AppHost` 架构，具有使用ultralytics格式或者hf格式模型进行图像识别推理的功能。整个项目具有技术架构新和创新功能多的特点，同时应用功能完善、代码格式扎实。
 
 ## 当前结构
@@ -181,11 +189,11 @@ Failed to find kernel for Cast(13) ... the node in the model has the following t
 
 当前已验证可用的处理方式如下：
 
-1. 使用`scripts`中`remove_back_to_back_cast.py`脚本, 来源于 [remove_back_to_back_cast.py](https://github.com/guschmue/ort-web-perf/blob/master/remove_back_to_back_cast.py)
+1. 使用 `scripts/remove_back_to_back_cast.py` 脚本，来源于 [remove_back_to_back_cast.py](https://github.com/guschmue/ort-web-perf/blob/master/remove_back_to_back_cast.py)
 2. 使用脚本转换原始模型，例如：
 
 ```powershell
-python .\remove_back_to_back_cast.py .\rtdetrv2_original_style_hugginface\model_fp16.onnx .\rtdetrv2_original_style_hugginface\model_fp16_encoded.onnx
+python .\scripts\remove_back_to_back_cast.py .\imageseg-training\training_result\rtdetrv2_original_style_hugginface\model_fp16.onnx .\imageseg-training\training_result\rtdetrv2_original_style_hugginface\model_fp16_encoded.onnx
 ```
 
 然后在 Web App 中导入转换后的 `model_fp16_encoded.onnx` 进行推理。
