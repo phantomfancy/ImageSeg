@@ -1,8 +1,0 @@
-html {
-  scroll-behavior: smooth;
-}
-
-body,
-#root {
-  min-height: 100vh;
-}

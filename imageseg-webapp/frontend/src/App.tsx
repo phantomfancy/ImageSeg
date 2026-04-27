@@ -10,6 +10,14 @@ import {
 import helpIcon from './assets/help-circle.svg?raw'
 import moonIcon from './assets/moon.svg?raw'
 import sunIcon from './assets/sun.svg?raw'
+import { AppGlobalStyle } from './app/AppGlobalStyle'
+import { Footer } from './components/Footer'
+import { HelpModal } from './components/HelpModal'
+import { HomePage } from './components/HomePage'
+import { PreviewZoomModal } from './components/PreviewZoomModal'
+import { TopBar } from './components/TopBar'
+import { WorkspacePage } from './components/WorkspacePage'
+import { WorkspaceSidebar } from './components/WorkspaceSidebar'
 import type { DetectionRun, ImportedModel, RunDetectionOptions } from './lib/onnxRuntime'
 import {
   getWebGpuSupportState,
@@ -28,7 +36,6 @@ import {
   validateSidecarFile,
   type InspectedOnnxModel,
 } from './lib/modelPackage'
-import './App.css'
 
 type InputMode = 'image' | 'video' | 'camera'
 type StreamState = 'idle' | 'running' | 'stopping' | 'exporting'
@@ -59,54 +66,13 @@ const PREVIEW_VIEWER_MAX_SCALE = 4
 const PREVIEW_VIEWER_WHEEL_STEP = 0.2
 const PREVIEW_VIEWER_DEFAULT_OFFSET: PreviewViewerOffset = { x: 0, y: 0 }
 const THEME_STORAGE_KEY = '4cimageseg-theme-mode'
-const THRESHOLD_COMMIT_KEYS = new Set([
-  'ArrowLeft',
-  'ArrowRight',
-  'ArrowUp',
-  'ArrowDown',
-  'Home',
-  'End',
-  'PageUp',
-  'PageDown',
-])
-const PAGE_NAV_ITEMS: ReadonlyArray<{ id: PageId; label: string }> = [
-  { id: 'home', label: '首页' },
-  { id: 'workspace', label: '工作台' },
-]
 const NAV_ITEMS: ReadonlyArray<{ id: SectionId; label: string; description: string }> = [
   { id: 'input-import', label: '输入与导入', description: '输入源、模型与配置' },
   { id: 'inference-settings', label: '推理设置', description: '阈值、数量与执行控制' },
   { id: 'results-export', label: '结果与导出', description: '预览、结果与导出入口' },
 ]
 
-const PROJECT_REPOSITORY_URL = 'https://github.com/phantomfancy/ImageSeg'
-const PROJECT_LICENSE_URL = `${PROJECT_REPOSITORY_URL}/blob/main/LICENSE`
-const FOOTER_CONTACT_EMAIL = 'phantomfancy@outlook.com'
-const FOOTER_FILING_NUMBER = '备案号待补充'
-const FOOTER_CERTIFICATION_INFO = '认证信息待补充'
 const FOOTER_COPYRIGHT_TEXT = `Copyright © ${new Date().getFullYear()} phantomfancy`
-const HELP_CONTENT: ReadonlyArray<{ title: string; body: string }> = [
-  {
-    title: '输入模式',
-    body: '图片模式适合单张检测，视频模式适合回放与导出，摄像头模式适合实时识别与现场观察。',
-  },
-  {
-    title: '模型与配置',
-    body: `先导入 ONNX 模型；如识别为 Hugging Face 风格模型，再补充 ${CONFIG_FILE_NAME}，必要时补充 ${PREPROCESSOR_CONFIG_FILE_NAME}。`,
-  },
-  {
-    title: '推理设置',
-    body: '推理阈值用于控制结果过滤强度，识别数量用于限制绘制数量；新值在提交后才会真正生效。',
-  },
-  {
-    title: '结果查看与导出',
-    body: '统一预览区会在原始输入和叠加结果之间切换，结果区会同步显示检测项列表，并提供图片或视频导出入口。',
-  },
-  {
-    title: '查看器操作',
-    body: '图像和结果查看器支持滚轮缩放、拖拽平移、双击切换；视频与摄像头预览则保留更接近标准播放器的操作方式。',
-  },
-]
 
 function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => readThemeMode())
@@ -256,7 +222,6 @@ function App() {
     runtimeMessage ||
     (importedModel && !isWebGpuSupported ? (webGpuSupportState.message ?? '') : '')
   const displayedPendingThreshold = pendingDetectionThreshold.toFixed(2)
-  const displayedAppliedThreshold = appliedDetectionThreshold.toFixed(2)
   const displayedAppliedMaxDetections = String(appliedMaxDetections)
   const displayedFps = streamFps === null ? '-' : streamFps.toFixed(1)
   const previewZoomScaleLabel = `${Math.round(previewViewerScale * 100)}%`
@@ -1416,965 +1381,202 @@ function App() {
       setStreamFps(fps)
     })
   }
+  function handleInputModeChange(mode: InputMode) {
+    stopActiveStream()
+    clearRecognitionOutputs()
+    setInputMode(mode)
+    if (mode === 'camera') {
+      void refreshCameraDevices()
+    }
+    setStatusMessage(
+      mode === 'image'
+        ? '已切换到图片识别模式。'
+        : mode === 'video'
+          ? '已切换到本地视频识别模式。'
+          : '已切换到摄像头识别模式。',
+    )
+  }
 
+  function openHelpDialog() {
+    setIsThemeMenuOpen(false)
+    setIsHelpOpen(true)
+  }
+
+  function handleThemeModeSelect(mode: ThemeMode) {
+    setThemeMode(mode)
+    setIsThemeMenuOpen(false)
+  }
   return (
-    <div className="app-shell">
-      {activePageId === 'workspace' ? (
-        <aside className={`sidebar${isSidebarExpanded ? ' sidebar--expanded' : ''}`}>
-          <button
-            type="button"
-            className="sidebar__toggle"
-            aria-expanded={isSidebarExpanded}
-            aria-controls="workspace-navigation"
-            aria-label={isSidebarExpanded ? '收起侧栏导航' : '展开侧栏导航'}
-            onClick={() => {
+    <>
+      <AppGlobalStyle />
+      <div className="app-shell">
+        {activePageId === 'workspace' ? (
+          <WorkspaceSidebar
+            activeSectionId={activeSectionId}
+            isExpanded={isSidebarExpanded}
+            onNavigate={handleNavigate}
+            onToggle={() => {
               setIsSidebarExpanded((currentValue) => !currentValue)
             }}
-          >
-            <span className="sidebar__toggle-icon" aria-hidden="true">
-              {isSidebarExpanded ? '×' : '≡'}
-            </span>
-            <span className="sidebar__toggle-text">{isSidebarExpanded ? '收起' : '导航'}</span>
-          </button>
-
-          <div className="sidebar__panel" aria-hidden={!isSidebarExpanded}>
-            <nav
-              id="workspace-navigation"
-              className="sidebar__nav"
-              aria-label="工作台区块导航"
-            >
-              {NAV_ITEMS.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={`sidebar__nav-item${activeSectionId === item.id ? ' sidebar__nav-item--active' : ''}`}
-                  aria-current={activeSectionId === item.id ? 'location' : undefined}
-                  onClick={() => {
-                    handleNavigate(item.id)
+          />
+        ) : null}
+        <div className="page-layout">
+          <TopBar
+            activePageId={activePageId}
+            currentThemeIcon={currentThemeIcon}
+            currentThemeLabel={currentThemeLabel}
+            helpIconMarkup={helpIcon}
+            isThemeMenuOpen={isThemeMenuOpen}
+            onHelpOpen={openHelpDialog}
+            onPageNavigate={handlePageNavigate}
+            onThemeMenuToggle={() => {
+              setIsThemeMenuOpen((currentValue) => !currentValue)
+            }}
+            onThemeModeSelect={handleThemeModeSelect}
+            themeMenuRef={themeMenuRef}
+            themeMode={themeMode}
+          />
+          <div className="surface">
+            <main className="shell">
+              {activePageId === 'home' ? (
+                <HomePage
+                  onEnterWorkspace={() => {
+                    handlePageNavigate('workspace')
                   }}
-                >
-                  <span className="sidebar__nav-label">{item.label}</span>
-                </button>
-              ))}
-            </nav>
-          </div>
-        </aside>
-      ) : null}
-
-      <div className="page-layout">
-        <header className="topbar">
-          <div className="topbar__brand">
-            <div className="topbar__title">ImageSeg-基于onnx的视觉推理工作台</div>
-          </div>
-
-          <nav className="topbar__page-nav" aria-label="页面导航">
-            {PAGE_NAV_ITEMS.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className={`topbar__nav-item${activePageId === item.id ? ' topbar__nav-item--active' : ''}`}
-                aria-current={activePageId === item.id ? 'page' : undefined}
-                onClick={() => {
-                  handlePageNavigate(item.id)
-                }}
-              >
-                {item.label}
-              </button>
-            ))}
-          </nav>
-
-          <div className="topbar__action-list">
-            <div className="topbar__menu-anchor" ref={themeMenuRef}>
-              <button
-                type="button"
-                className="topbar__action-button"
-                aria-haspopup="menu"
-                aria-expanded={isThemeMenuOpen}
-                aria-label={`主题切换，当前为${currentThemeLabel}`}
-                title={`主题切换，当前为${currentThemeLabel}`}
-                onClick={() => {
-                  setIsThemeMenuOpen((currentValue) => !currentValue)
-                }}
-              >
-                <SvgIcon markup={currentThemeIcon} />
-                <span>主题</span>
-              </button>
-
-              {isThemeMenuOpen ? (
-                <div className="topbar__menu" role="menu" aria-label="主题切换">
-                  {([
-                    ['dark', '深色'],
-                    ['light', '浅色'],
-                    ['system', '跟随系统'],
-                  ] as const).map(([mode, label]) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      role="menuitemradio"
-                      aria-checked={themeMode === mode}
-                      className={`topbar__menu-item${themeMode === mode ? ' topbar__menu-item--active' : ''}`}
-                      onClick={() => {
-                        setThemeMode(mode)
-                        setIsThemeMenuOpen(false)
-                      }}
-                    >
-                      <span>{label}</span>
-                      {themeMode === mode ? <span className="topbar__menu-check">当前</span> : null}
-                    </button>
-                  ))}
-                </div>
+                  onHelpOpen={openHelpDialog}
+                />
               ) : null}
-            </div>
-
-            <button
-              type="button"
-              className="topbar__action-button"
-              aria-label="帮助说明"
-              title="帮助说明"
-              onClick={() => {
-                setIsThemeMenuOpen(false)
-                setIsHelpOpen(true)
-              }}
-            >
-              <SvgIcon markup={helpIcon} />
-              <span>帮助</span>
-            </button>
+              {activePageId === 'workspace' ? (
+                <WorkspacePage
+                  appliedDetectionThreshold={appliedDetectionThreshold}
+                  cameraBusy={cameraBusy}
+                  cameraDevices={cameraDevices}
+                  cameraVideoRef={cameraVideoRef}
+                  canAdjustInferenceSettings={canAdjustInferenceSettings}
+                  canChangeModel={canChangeModel}
+                  canExportImage={canExportImage}
+                  canExportVideo={canExportVideo}
+                  canOpenPreviewZoom={canOpenPreviewZoom}
+                  canRunImage={canRunImage}
+                  canStartCamera={canStartCamera}
+                  canStartVideo={canStartVideo}
+                  canStopCamera={canStopCamera}
+                  canStopVideo={canStopVideo}
+                  configInputKey={configInputKey}
+                  currentTimeLabel={currentTimeLabel}
+                  detectionItems={detectionItems}
+                  displayedAppliedMaxDetections={displayedAppliedMaxDetections}
+                  displayedContract={displayedContract}
+                  displayedFps={displayedFps}
+                  displayedPendingThreshold={displayedPendingThreshold}
+                  displayedProvider={displayedProvider}
+                  displayedRuntimeMessage={displayedRuntimeMessage}
+                  displayedSidecars={displayedSidecars}
+                  discoverBusy={discoverBusy}
+                  formatDims={formatDims}
+                  hasRenderedResult={hasRenderedResult}
+                  imageDetectBusy={imageDetectBusy}
+                  imageFileName={imageFile?.name ?? ''}
+                  imagePreviewUrl={imagePreviewUrl}
+                  importControls={importControls}
+                  importedModelExists={Boolean(importedModel)}
+                  inputMode={inputMode}
+                  modelBusy={modelBusy}
+                  onAutoDiscoverSidecars={handleAutoDiscoverSidecars}
+                  onCommitDetectionThreshold={commitDetectionThreshold}
+                  onCommitMaxDetections={commitMaxDetections}
+                  onConfigSelection={handleConfigSelection}
+                  onExportImage={handleExportImage}
+                  onExportVideo={handleExportVideo}
+                  onImageSelection={updateImageFile}
+                  onMaxDetectionsInputChange={setPendingMaxDetectionsInput}
+                  onModeChange={handleInputModeChange}
+                  onOnnxSelection={handleOnnxSelection}
+                  onOpenPreviewZoom={openPreviewZoom}
+                  onPreprocessorSelection={handlePreprocessorSelection}
+                  onRunImageDetection={handleRunImageDetection}
+                  onSelectedCameraChange={setSelectedCameraId}
+                  onStartCameraDetection={handleStartCameraDetection}
+                  onStartVideoDetection={handleStartVideoDetection}
+                  onStopCamera={() => {
+                    stopActiveStream('已停止摄像头实时识别。')
+                  }}
+                  onStopVideo={() => {
+                    stopActiveStream('已停止视频实时识别。')
+                  }}
+                  onThresholdChange={(value) => {
+                    setPendingDetectionThreshold(clampDetectionThreshold(value))
+                  }}
+                  onVideoSelection={updateVideoFile}
+                  onnxInputKey={onnxInputKey}
+                  onnxModelDraft={onnxModelDraft}
+                  pendingDetectionThreshold={pendingDetectionThreshold}
+                  pendingMaxDetectionsInput={pendingMaxDetectionsInput}
+                  preprocessorInputKey={preprocessorInputKey}
+                  previewOpenLabel={previewOpenLabel}
+                  resultCanvasRef={resultCanvasRef}
+                  resultProvider={resultProvider}
+                  selectedCameraId={selectedCameraId}
+                  sourceVideoRef={sourceVideoRef}
+                  statusMessage={statusMessage}
+                  streamState={streamState}
+                  supportsCamera={supportsCamera}
+                  supportsDirectoryPicker={supportsDirectoryPicker}
+                  supportsVideoExport={supportsVideoExport}
+                  videoDownloadFileName={buildVideoExportFileName(videoFile?.name ?? 'result')}
+                  videoDownloadUrl={videoDownloadUrl}
+                  videoFileName={videoFile?.name ?? ''}
+                  videoPreviewUrl={videoPreviewUrl}
+                />
+              ) : null}
+            </main>
           </div>
-        </header>
-
-        <div className="surface">
-          <main className="shell">
-            {activePageId === 'home' ? (
-              <div className="home-page">
-                <section className="hero hero--home">
-                  <div className="hero__content">
-                    <div className="hero__eyebrow">ImageSeg-基于onnx的视觉推理工作台</div>
-                    <h1>基于onnx的视觉推理工作台</h1>
-                    <p className="hero__copy">
-                      面向单图、视频与摄像头场景的本地 ONNX 推理工作台，使用基于CNN或Transformers的目标检测模型进行图像推理。
-                      导入、推理编排、结果解码和导出全部在前端完成，适合快速验证识别模型。
-                    </p>
-                    <div className="hero__actions">
-                      <button
-                        type="button"
-                        className="hero__action hero__action--primary"
-                        onClick={() => {
-                          handlePageNavigate('workspace')
-                        }}
-                      >
-                        进入工作台
-                      </button>
-                      <button
-                        type="button"
-                        className="hero__action hero__action--secondary"
-                        onClick={() => {
-                          setIsThemeMenuOpen(false)
-                          setIsHelpOpen(true)
-                        }}
-                      >
-                        查看使用说明
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="hero__signal" aria-label="当前能力摘要">
-                    <div className="hero__signal-card">
-                      <span className="hero__signal-label">输入源</span>
-                      <strong>图片 / 视频 / 摄像头</strong>
-                    </div>
-                    <div className="hero__signal-card">
-                      <span className="hero__signal-label">推理后端</span>
-                      <strong>ONNX Runtime WebGPU</strong>
-                    </div>
-                    <div className="hero__signal-card">
-                      <span className="hero__signal-label">模型契约</span>
-                      <strong>统一解码与预处理</strong>
-                    </div>
-                  </div>
-                </section>
-
-                <section className="home-grid" aria-label="首页功能概览">
-                  <article className="home-card">
-                    <div className="home-card__index">01</div>
-                    <h2>纯前端推理</h2>
-                    <p>输入源、ONNX 会话、结果绘制和导出都在浏览器端完成，减少服务端部署依赖。</p>
-                  </article>
-                  <article className="home-card">
-                    <div className="home-card__index">02</div>
-                    <h2>统一模型输出</h2>
-                    <p>通过 Contracts 统一不同检测模型的预处理、输出签名和解码逻辑，降低模型切换成本。</p>
-                  </article>
-                  <article className="home-card">
-                    <div className="home-card__index">03</div>
-                    <h2>结果复核与导出</h2>
-                    <p>同一预览区支持输入源和叠加结果切换，图像查看器可缩放、平移并复核框选细节。</p>
-                  </article>
-                </section>
-              </div>
-            ) : null}
-
-            {activePageId === 'workspace' ? (
-              <>
-          <section className="operation-grid" aria-label="识别工作台">
-            <div className="operation-grid__controls panel-stack">
-              <article className="panel panel--input" id="input-import" data-nav-section>
-                <header className="panel__header">
-                  <h2>输入与导入</h2>
-                </header>
-
-                <div className="mode-switch">
-                  {(['image', 'video', 'camera'] as const).map((mode) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      className={`mode-switch__button${inputMode === mode ? ' mode-switch__button--active' : ''}`}
-                      disabled={streamState !== 'idle'}
-                      onClick={() => {
-                        stopActiveStream()
-                        clearRecognitionOutputs()
-                        setInputMode(mode)
-                        if (mode === 'camera') {
-                          void refreshCameraDevices()
-                        }
-                        setStatusMessage(
-                          mode === 'image'
-                            ? '已切换到图片识别模式。'
-                            : mode === 'video'
-                              ? '已切换到本地视频识别模式。'
-                              : '已切换到摄像头识别模式。',
-                        )
-                      }}
-                    >
-                      {mode === 'image' ? '图片' : mode === 'video' ? '视频' : '摄像头'}
-                    </button>
-                  ))}
-                </div>
-
-                {inputMode === 'image' ? (
-                  <label className="field">
-                    <span className="field__label">图片文件</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      disabled={streamState !== 'idle'}
-                      onChange={(event) => {
-                        updateImageFile(event.target.files?.[0] ?? null)
-                      }}
-                    />
-                    <span className="field__hint">{imageFile?.name ?? '未选择图片。'}</span>
-                  </label>
-                ) : null}
-
-                {inputMode === 'video' ? (
-                  <label className="field">
-                    <span className="field__label">视频文件</span>
-                    <input
-                      type="file"
-                      accept="video/*"
-                      disabled={streamState !== 'idle'}
-                      onChange={(event) => {
-                        updateVideoFile(event.target.files?.[0] ?? null)
-                      }}
-                    />
-                    <span className="field__hint">{videoFile?.name ?? '未选择视频。'}</span>
-                  </label>
-                ) : null}
-
-                {inputMode === 'camera' ? (
-                  <label className="field">
-                    <span className="field__label">摄像头设备</span>
-                    <select
-                      className="field__select"
-                      value={selectedCameraId}
-                      disabled={cameraBusy || streamState !== 'idle' || cameraDevices.length === 0}
-                      onChange={(event) => {
-                        setSelectedCameraId(event.target.value)
-                      }}
-                    >
-                      {cameraDevices.length === 0 ? (
-                        <option value="">未发现可用摄像头</option>
-                      ) : (
-                        cameraDevices.map((item) => (
-                          <option key={item.deviceId} value={item.deviceId}>
-                            {item.label}
-                          </option>
-                        ))
-                      )}
-                    </select>
-                    <span className="field__hint">
-                      {supportsCamera
-                        ? (cameraDevices.length === 0 ? '首次授权前可能无法显示设备标签。' : '选择需要用于实时识别的摄像头。')
-                        : '当前浏览器不支持摄像头访问。'}
-                    </span>
-                  </label>
-                ) : null}
-
-                <label className="field">
-                  <span className="field__label">ONNX 模型</span>
-                  <input
-                    key={onnxInputKey}
-                    type="file"
-                    accept=".onnx"
-                    disabled={!canChangeModel}
-                    onChange={(event) => {
-                      void handleOnnxSelection(event.target.files?.[0] ?? null)
-                    }}
-                  />
-                </label>
-
-                <label className="field">
-                  <span className="field__label">{CONFIG_FILE_NAME} {importControls.configRequired ? '(必选)' : '(未启用)'}</span>
-                  <input
-                    key={configInputKey}
-                    type="file"
-                    accept=".json,application/json"
-                    disabled={!importControls.configEnabled || !canChangeModel}
-                    onChange={(event) => {
-                      void handleConfigSelection(event.target.files?.[0] ?? null)
-                    }}
-                  />
-                </label>
-
-                <label className="field">
-                  <span className="field__label">{PREPROCESSOR_CONFIG_FILE_NAME} {importControls.preprocessorEnabled ? '(可选)' : '(未启用)'}</span>
-                  <input
-                    key={preprocessorInputKey}
-                    type="file"
-                    accept=".json,application/json"
-                    disabled={!importControls.preprocessorEnabled || !canChangeModel}
-                    onChange={(event) => {
-                      void handlePreprocessorSelection(event.target.files?.[0] ?? null)
-                    }}
-                  />
-                </label>
-
-                {onnxModelDraft?.family === 'hf-detr-like' ? (
-                  <div className="actions actions--stacked">
-                    <button
-                      type="button"
-                      className="action action--secondary"
-                      disabled={!importControls.autoDiscoverEnabled || !canChangeModel || discoverBusy}
-                      onClick={() => void handleAutoDiscoverSidecars()}
-                    >
-                      {discoverBusy ? '查找中...' : '自动查找同目录配置'}
-                    </button>
-                    {!supportsDirectoryPicker ? (
-                      <span className="field__hint">当前浏览器不支持目录授权，请手动导入 JSON 配置文件。</span>
-                    ) : null}
-                  </div>
-                ) : null}
-
-                <div className="status-box">
-                  <div className="status-box__title">状态</div>
-                  <p>{statusMessage}</p>
-                  {displayedRuntimeMessage ? <p>{displayedRuntimeMessage}</p> : null}
-                </div>
-              </article>
-            </div>
-
-            <article className="panel panel--preview operation-grid__preview" id="results-export" data-nav-section>
-              <header className="panel__header">
-                <h2>统一预览</h2>
-              </header>
-
-              <div className="preview-card preview-stage">
-                <div className="preview-card__title">当前画面</div>
-                <div className="preview-stage__media">
-                  {canOpenPreviewZoom ? (
-                    <button
-                      type="button"
-                      className="preview-stage__zoom-button"
-                      aria-label={previewOpenLabel}
-                      title={previewOpenLabel}
-                      onClick={() => {
-                        openPreviewZoom()
-                      }}
-                    >
-                      <span className="preview-stage__zoom-icon" aria-hidden="true">+</span>
-                    </button>
-                  ) : null}
-
-                  {inputMode === 'image' ? (
-                    imagePreviewUrl ? (
-                      <img
-                        className={`preview-stage__image${hasRenderedResult ? ' preview-stage__visual--hidden' : ''}`}
-                        src={imagePreviewUrl}
-                        alt="输入图片"
-                      />
-                    ) : (
-                      <EmptyState text="未选择图片。" />
-                    )
-                  ) : null}
-
-                  {inputMode === 'video' ? (
-                    videoPreviewUrl ? (
-                      <video
-                        ref={sourceVideoRef}
-                        className={`preview-stage__video${hasRenderedResult ? ' preview-stage__visual--hidden' : ''}`}
-                        src={videoPreviewUrl}
-                        controls
-                        playsInline
-                        muted
-                      />
-                    ) : (
-                      <EmptyState text="未选择视频。" />
-                    )
-                  ) : null}
-
-                  {inputMode === 'camera' ? (
-                    <>
-                      <video
-                        ref={cameraVideoRef}
-                        className={`preview-stage__video${streamState === 'running' && !hasRenderedResult ? '' : ' preview-stage__visual--hidden'}`}
-                        autoPlay
-                        muted
-                        playsInline
-                      />
-                      {streamState !== 'running' ? <EmptyState text="尚未启动摄像头。" /> : null}
-                    </>
-                  ) : null}
-
-                  <canvas
-                    ref={resultCanvasRef}
-                    className={`preview-stage__canvas${hasRenderedResult ? '' : ' preview-stage__visual--hidden'}`}
-                  />
-                </div>
-              </div>
-            </article>
-
-            <article className="panel panel--settings operation-grid__settings" id="inference-settings" data-nav-section>
-              <header className="panel__header">
-                <h2>推理设置</h2>
-              </header>
-
-              <label className="field">
-                <span className="field__label">推理阈值</span>
-                <div className="threshold-control">
-                  <input
-                    className="threshold-control__slider"
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.01"
-                    value={pendingDetectionThreshold}
-                    disabled={!canAdjustInferenceSettings}
-                    onChange={(event) => {
-                      setPendingDetectionThreshold(clampDetectionThreshold(Number(event.target.value)))
-                    }}
-                    onPointerUp={(event) => {
-                      commitDetectionThreshold(Number(event.currentTarget.value))
-                    }}
-                    onKeyUp={(event) => {
-                      if (THRESHOLD_COMMIT_KEYS.has(event.key)) {
-                        commitDetectionThreshold(Number(event.currentTarget.value))
-                      }
-                    }}
-                    onBlur={(event) => {
-                      commitDetectionThreshold(Number(event.currentTarget.value))
-                    }}
-                  />
-                  <span className="threshold-control__value">{displayedPendingThreshold}</span>
-                </div>
-                <span className="field__hint">
-                {importedModel
-                  ? `当前值 ${displayedPendingThreshold}，已生效 ${displayedAppliedThreshold}。拖动过程中不会立即重跑推理，松开后新阈值才会生效。`
-                  : '导入模型后可调整推理阈值。'}
-              </span>
-              </label>
-
-              <label className="field">
-                <span className="field__label">识别数量</span>
-                <div className="count-control">
-                  <input
-                    className="count-control__input"
-                    type="number"
-                    min="0"
-                    step="1"
-                    inputMode="numeric"
-                    value={pendingMaxDetectionsInput}
-                    disabled={!canAdjustInferenceSettings}
-                    onChange={(event) => {
-                      setPendingMaxDetectionsInput(event.target.value)
-                    }}
-                    onBlur={(event) => {
-                      commitMaxDetections(event.currentTarget.value)
-                    }}
-                  />
-                  <span className="count-control__value">{displayedAppliedMaxDetections}</span>
-                </div>
-              </label>
-
-              <div className="actions actions--stacked">
-                {inputMode === 'image' ? (
-                  <>
-                    <button
-                      type="button"
-                      className="action action--primary"
-                      disabled={!canRunImage}
-                      onClick={() => void handleRunImageDetection()}
-                    >
-                      {imageDetectBusy ? '识别中...' : '执行图片识别'}
-                    </button>
-                    <button
-                      type="button"
-                      className="action action--secondary"
-                      disabled={!canExportImage}
-                      onClick={() => void handleExportImage()}
-                    >
-                      导出结果图像
-                    </button>
-                  </>
-                ) : null}
-
-                {inputMode === 'video' ? (
-                  <>
-                    <button
-                      type="button"
-                      className="action action--primary"
-                      disabled={!canStartVideo}
-                      onClick={() => void handleStartVideoDetection()}
-                    >
-                      开始实时识别
-                    </button>
-                    <button
-                      type="button"
-                      className="action action--secondary"
-                      disabled={!canStopVideo}
-                      onClick={() => stopActiveStream('已停止视频实时识别。')}
-                    >
-                      停止实时识别
-                    </button>
-                    <button
-                      type="button"
-                      className="action action--secondary"
-                      disabled={!canExportVideo}
-                      onClick={() => void handleExportVideo()}
-                    >
-                      {streamState === 'exporting' ? '导出中...' : '导出结果视频'}
-                    </button>
-                    {videoDownloadUrl ? (
-                      <a
-                        className="download-link"
-                        href={videoDownloadUrl}
-                        download={buildVideoExportFileName(videoFile?.name ?? 'result')}
-                      >
-                        下载结果 WebM
-                      </a>
-                    ) : null}
-                    {!supportsVideoExport ? (
-                      <span className="field__hint">当前浏览器不支持 `MediaRecorder WebM` 导出。</span>
-                    ) : null}
-                  </>
-                ) : null}
-
-                {inputMode === 'camera' ? (
-                  <>
-                    <button
-                      type="button"
-                      className="action action--primary"
-                      disabled={!canStartCamera}
-                      onClick={() => void handleStartCameraDetection()}
-                    >
-                      {cameraBusy ? '启动中...' : '开始实时识别'}
-                    </button>
-                    <button
-                      type="button"
-                      className="action action--secondary"
-                      disabled={!canStopCamera}
-                      onClick={() => stopActiveStream('已停止摄像头实时识别。')}
-                    >
-                      停止实时识别
-                    </button>
-                  </>
-                ) : null}
-              </div>
-            </article>
-          </section>
-
-          <section className="results-row" aria-label="检测结果">
-            <article className="panel panel--detections results-row__panel">
-              <header className="panel__header">
-                <h2>检测结果</h2>
-              </header>
-
-              <div className="metric-grid metric-grid--compact">
-                <Metric label="Runtime" value={resultProvider || '-'} />
-                <Metric label="Source Mode" value={inputMode} />
-                <Metric label="Detection Count" value={String(detectionItems.length)} />
-                <Metric label="Current Time" value={currentTimeLabel} />
-                <Metric label="FPS" value={displayedFps} />
-              </div>
-
-              {detectionItems.length === 0 ? (
-                <EmptyState text={
-                  inputMode === 'image'
-                    ? (imageDetectBusy ? '正在等待图片识别结果...' : '当前没有可展示的检测项。')
-                    : (streamState === 'running' || streamState === 'exporting')
-                      ? '正在等待当前帧的推理结果...'
-                      : '当前没有可展示的检测项。'
-                } />
-              ) : (
-                <div className="result-list">
-                  {detectionItems.map((item, index) => (
-                    <div className="result-row" key={`${item.label}-${index}`}>
-                      <div>
-                        <div className="result-row__label">{item.label}</div>
-                        <div className="result-row__box">{item.boxSummary}</div>
-                      </div>
-                      <div className="result-row__score">{(item.confidence * 100).toFixed(1)}%</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </article>
-          </section>
-
-          <article className="panel panel--contract diagnostics-panel diagnostics-row">
-            <header className="panel__header">
-              <h2>模型契约</h2>
-            </header>
-
-            {displayedContract ? (
-              <div className="contract">
-                <div className="metric-grid">
-                  <Metric label="Display Name" value={displayedContract.displayName} />
-                  <Metric label="Family" value={displayedContract.family} />
-                  <Metric label="Provider" value={displayedProvider} />
-                  <Metric label="Label Source" value={displayedContract.labelSource} />
-                  <Metric label="Sidecars" value={displayedSidecars} />
-                  <Metric label="Input Tensor" value={displayedContract.preprocess.inputTensorName} />
-                  <Metric
-                    label="Image Size"
-                    value={`${displayedContract.preprocess.imageWidth} x ${displayedContract.preprocess.imageHeight}`}
-                  />
-                </div>
-
-                <SignatureTable title="Inputs" items={displayedContract.inputs.map((item) => ({
-                  name: item.name,
-                  dims: formatDims(item.dimensions),
-                }))} />
-
-                <SignatureTable title="Outputs" items={displayedContract.outputs.map((item) => ({
-                  name: item.name,
-                  dims: formatDims(item.dimensions),
-                }))} />
-
-                <div className="warnings">
-                  <div className="warnings__title">Warnings</div>
-                  {displayedContract.warnings.length === 0 ? (
-                    <p>当前模型未发现额外警告。</p>
-                  ) : (
-                    displayedContract.warnings.map((item) => (
-                      <p key={item}>{item}</p>
-                    ))
-                  )}
-                </div>
-              </div>
-            ) : (
-              <EmptyState text={modelBusy ? '正在建立会话并解析模型签名...' : '尚未导入模型。'} />
-            )}
-          </article>
-              </>
-            ) : null}
-          </main>
+          <Footer copyrightText={FOOTER_COPYRIGHT_TEXT} />
         </div>
-
-        <footer className="footer">
-          <div className="footer__section footer__section--brand">
-            <div className="footer__title">ImageSeg-基于onnx的视觉推理工作台</div>
-            <p className="footer__copy">{FOOTER_COPYRIGHT_TEXT}</p>
-            <p className="footer__copy">项目源码依据 AGPL-3.0 许可进行分发与修改。</p>
-          </div>
-
-          <div className="footer__section">
-            <div className="footer__heading">联系方式</div>
-            <a className="footer__link" href={`mailto:${FOOTER_CONTACT_EMAIL}`}>
-              {FOOTER_CONTACT_EMAIL}
-            </a>
-          </div>
-
-          <div className="footer__section">
-            <div className="footer__heading">备案与认证</div>
-            <div className="footer__meta-list">
-              <div className="footer__meta-item">
-                <span className="footer__label">备案信息</span>
-                <span className="footer__value">{FOOTER_FILING_NUMBER}</span>
-              </div>
-              <div className="footer__meta-item">
-                <span className="footer__label">认证信息</span>
-                <span className="footer__value">{FOOTER_CERTIFICATION_INFO}</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="footer__section">
-            <div className="footer__heading">项目链接</div>
-            <div className="footer__link-list">
-              <a
-                className="footer__link"
-                href={PROJECT_LICENSE_URL}
-                target="_blank"
-                rel="noreferrer"
-              >
-                项目 LICENSE
-              </a>
-              <a
-                className="footer__link"
-                href={PROJECT_REPOSITORY_URL}
-                target="_blank"
-                rel="noreferrer"
-              >
-                项目仓库
-              </a>
-            </div>
-          </div>
-        </footer>
-      </div>
-
-      {isHelpOpen ? (
-        <div className="help-modal" role="dialog" aria-modal="true" aria-label="帮助说明">
-          <button
-            type="button"
-            className="help-modal__backdrop"
-            aria-label="关闭帮助说明"
-            onClick={() => {
-              setIsHelpOpen(false)
+        {isHelpOpen ? <HelpModal onClose={() => { setIsHelpOpen(false) }} /> : null}
+        {isPreviewZoomOpen && previewZoomTarget ? (
+          <PreviewZoomModal
+            closePreviewZoom={closePreviewZoom}
+            currentTimeLabel={currentTimeLabel}
+            detectionItemCount={detectionItems.length}
+            handlePreviewMediaDoubleClick={handlePreviewMediaDoubleClick}
+            handlePreviewPointerDown={handlePreviewPointerDown}
+            handlePreviewPointerMove={handlePreviewPointerMove}
+            handlePreviewPointerRelease={handlePreviewPointerRelease}
+            handlePreviewWheel={handlePreviewWheel}
+            imagePreviewUrl={imagePreviewUrl}
+            inputMode={inputMode}
+            isPreviewViewerFullscreen={isPreviewViewerFullscreen}
+            isScalablePreviewTarget={isScalablePreviewTarget}
+            previewViewerOffset={previewViewerOffset}
+            previewViewerScale={previewViewerScale}
+            previewZoomCanvasRef={previewZoomCanvasRef}
+            previewZoomDialogRef={previewZoomDialogRef}
+            previewZoomMediaRef={previewZoomMediaRef}
+            previewZoomScaleLabel={previewZoomScaleLabel}
+            previewZoomTarget={previewZoomTarget}
+            previewZoomVideoRef={previewZoomVideoRef}
+            previewZoomViewportRef={previewZoomViewportRef}
+            resultProvider={resultProvider}
+            scaleDecreaseDisabled={previewViewerScale <= PREVIEW_VIEWER_MIN_SCALE + 0.01}
+            scaleIncreaseDisabled={previewViewerScale >= PREVIEW_VIEWER_MAX_SCALE - 0.01}
+            setPreviewViewerDefault={() => {
+              setPreviewViewerScaleValue(PREVIEW_VIEWER_DEFAULT_SCALE)
+              setPreviewViewerOffset(PREVIEW_VIEWER_DEFAULT_OFFSET)
             }}
-          />
-
-          <div className="help-modal__dialog">
-            <div className="help-modal__header">
-              <div>
-                <div className="help-modal__eyebrow">帮助</div>
-                <h2 className="help-modal__title">工作台使用说明</h2>
-                <p className="help-modal__copy">
-                  这里整理了当前前端工作台最常用的导入、推理、查看与导出说明。
-                </p>
-              </div>
-
-              <button
-                type="button"
-                className="help-modal__close"
-                onClick={() => {
-                  setIsHelpOpen(false)
-                }}
-              >
-                关闭
-              </button>
-            </div>
-
-            <div className="help-modal__grid">
-              {HELP_CONTENT.map((item) => (
-                <section className="help-modal__card" key={item.title}>
-                  <h3>{item.title}</h3>
-                  <p>{item.body}</p>
-                </section>
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {isPreviewZoomOpen && previewZoomTarget ? (
-        <div className="preview-zoom" role="dialog" aria-modal="true" aria-label="放大预览">
-          <button
-            type="button"
-            className="preview-zoom__backdrop"
-            aria-label="关闭放大预览"
-            onClick={() => {
-              closePreviewZoom()
+            setPreviewViewerScaleStepDown={() => {
+              setPreviewViewerScaleValue(previewViewerScale - PREVIEW_VIEWER_WHEEL_STEP)
             }}
+            setPreviewViewerScaleStepUp={() => {
+              setPreviewViewerScaleValue(previewViewerScale + PREVIEW_VIEWER_WHEEL_STEP)
+            }}
+            togglePreviewViewerFullscreen={togglePreviewViewerFullscreen}
           />
-
-          <div className="preview-zoom__dialog" ref={previewZoomDialogRef}>
-            <div className="preview-zoom__header">
-              <div className="preview-zoom__summary">
-                <div className="preview-zoom__summary-top">
-                  <span className="preview-zoom__badge">
-                    {isScalablePreviewTarget ? '图像查看器' : '媒体播放器'}
-                  </span>
-                  {isScalablePreviewTarget ? (
-                    <span className="preview-zoom__scale">{previewZoomScaleLabel}</span>
-                  ) : null}
-                </div>
-                <div className="preview-zoom__meta">
-                  <span className="preview-zoom__meta-item">模式 {inputMode}</span>
-                  <span className="preview-zoom__meta-item">Runtime {resultProvider || '-'}</span>
-                  <span className="preview-zoom__meta-item">时间 {currentTimeLabel}</span>
-                  {isScalablePreviewTarget ? (
-                    <span className="preview-zoom__meta-item">检测项 {detectionItems.length}</span>
-                  ) : null}
-                </div>
-              </div>
-
-              <div className="preview-zoom__toolbar">
-                <div className="preview-zoom__toolbar-group">
-                  {isScalablePreviewTarget ? (
-                    <>
-                      <button
-                        type="button"
-                        className="preview-zoom__action"
-                        disabled={previewViewerScale <= PREVIEW_VIEWER_MIN_SCALE + 0.01}
-                        onClick={() => {
-                          setPreviewViewerScaleValue(previewViewerScale - PREVIEW_VIEWER_WHEEL_STEP)
-                        }}
-                      >
-                        缩小
-                      </button>
-                      <button
-                        type="button"
-                        className={`preview-zoom__action${
-                          Math.abs(previewViewerScale - PREVIEW_VIEWER_DEFAULT_SCALE) < 0.01
-                            ? ' preview-zoom__action--active'
-                            : ''
-                        }`}
-                        onClick={() => {
-                          setPreviewViewerScaleValue(PREVIEW_VIEWER_DEFAULT_SCALE)
-                          setPreviewViewerOffset(PREVIEW_VIEWER_DEFAULT_OFFSET)
-                        }}
-                      >
-                        适合窗口
-                      </button>
-                      <button
-                        type="button"
-                        className="preview-zoom__action"
-                        disabled={previewViewerScale >= PREVIEW_VIEWER_MAX_SCALE - 0.01}
-                        onClick={() => {
-                          setPreviewViewerScaleValue(previewViewerScale + PREVIEW_VIEWER_WHEEL_STEP)
-                        }}
-                      >
-                        放大
-                      </button>
-                      <button
-                        type="button"
-                        className="preview-zoom__action"
-                        onClick={() => {
-                          setPreviewViewerScaleValue(PREVIEW_VIEWER_DEFAULT_SCALE)
-                          setPreviewViewerOffset(PREVIEW_VIEWER_DEFAULT_OFFSET)
-                        }}
-                      >
-                        重置视图
-                      </button>
-                    </>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="preview-zoom__action"
-                    onClick={() => {
-                      void togglePreviewViewerFullscreen()
-                    }}
-                  >
-                    {isPreviewViewerFullscreen ? '退出全屏' : '全屏'}
-                  </button>
-                  <button
-                    type="button"
-                    className="preview-zoom__action preview-zoom__action--close"
-                    onClick={() => {
-                      closePreviewZoom()
-                    }}
-                  >
-                    关闭
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div
-              ref={previewZoomViewportRef}
-              className={`preview-zoom__viewport${
-                isScalablePreviewTarget ? ' preview-zoom__viewport--interactive' : ''
-              }`}
-              onWheel={isScalablePreviewTarget ? handlePreviewWheel : undefined}
-            >
-              <div
-                ref={previewZoomMediaRef}
-                className={`preview-zoom__media-wrapper${
-                  isScalablePreviewTarget && previewViewerScale > PREVIEW_VIEWER_DEFAULT_SCALE
-                    ? ' preview-zoom__media-wrapper--draggable'
-                    : ''
-                }`}
-                style={isScalablePreviewTarget
-                  ? {
-                    transform: `translate(${previewViewerOffset.x}px, ${previewViewerOffset.y}px) scale(${previewViewerScale})`,
-                  }
-                  : undefined}
-                onDoubleClick={isScalablePreviewTarget ? handlePreviewMediaDoubleClick : undefined}
-                onPointerCancel={isScalablePreviewTarget ? handlePreviewPointerRelease : undefined}
-                onPointerDown={isScalablePreviewTarget ? handlePreviewPointerDown : undefined}
-                onPointerMove={isScalablePreviewTarget ? handlePreviewPointerMove : undefined}
-                onPointerUp={isScalablePreviewTarget ? handlePreviewPointerRelease : undefined}
-              >
-                {previewZoomTarget === 'image' ? (
-                  <img className="preview-zoom__image" src={imagePreviewUrl} alt="放大预览图片" />
-                ) : null}
-
-                {previewZoomTarget === 'video' || previewZoomTarget === 'camera' ? (
-                  <video
-                    ref={previewZoomVideoRef}
-                    className="preview-zoom__video"
-                    autoPlay={previewZoomTarget === 'camera'}
-                    controls={previewZoomTarget === 'video'}
-                    muted
-                    playsInline
-                  />
-                ) : null}
-
-                {previewZoomTarget === 'result-canvas' ? (
-                  <canvas ref={previewZoomCanvasRef} className="preview-zoom__canvas" />
-                ) : null}
-              </div>
-            </div>
-
-          </div>
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
-function SvgIcon(props: { markup: string }) {
-  return (
-    <span
-      className="svg-icon"
-      aria-hidden="true"
-      dangerouslySetInnerHTML={{ __html: props.markup }}
-    />
-  )
-}
-
-function Metric(props: { label: string; value: string }) {
-  return (
-    <div className="metric">
-      <div className="metric__label">{props.label}</div>
-      <div className="metric__value">{props.value}</div>
-    </div>
-  )
-}
-
-function SignatureTable(props: { title: string; items: Array<{ name: string; dims: string }> }) {
-  return (
-    <section className="signature-block">
-      <h3>{props.title}</h3>
-      <div className="signature-list">
-        {props.items.map((item) => (
-          <div className="signature-row" key={`${props.title}-${item.name}`}>
-            <span>{item.name}</span>
-            <code>{item.dims}</code>
-          </div>
-        ))}
+        ) : null}
       </div>
-    </section>
+    </>
   )
 }
-
-function EmptyState(props: { text: string }) {
-  return (
-    <div className="empty-state">
-      <p>{props.text}</p>
-    </div>
-  )
-}
-
 function formatModelReadyMessage(
   model: ImportedModel,
   webGpuSupportState: { supported: boolean; message?: string },
@@ -2745,3 +1947,4 @@ function getPreferredVideoMimeType(): string | null {
 }
 
 export default App
+
