@@ -17,8 +17,6 @@ web-app/frontend/public/ort/
 *.pt
 dataset*/
 runs/
-pytorch-trainin/dataset*
-pytorch-training/runs
 
 # User-specific files
 *.rsuser
