@@ -1,13 +1,13 @@
-# 4CImageSeg
+# ImageSeg
 
-`4C-ai装备识别工具` 使用 `React 19 + TypeScript + ONNX Runtime Web/WebGPU + Aspire TypeScript AppHost` 架构，具有使用ultralytics格式或者hf格式模型进行图像识别推理的功能，并且开发了针对装备识别的额外功能。整个项目具有技术架构新和创新功能多的特点，同时应用功能完善、代码格式扎实。
+`ImageSeg-ai装备识别工具` 使用 `React 19 + TypeScript + ONNX Runtime Web/WebGPU + Aspire TypeScript AppHost` 架构，具有使用ultralytics格式或者hf格式模型进行图像识别推理的功能，并且开发了针对装备识别的额外功能。整个项目具有技术架构新和创新功能多的特点，同时应用功能完善、代码格式扎实。
 
 ## 当前结构
 
 - `apphost.ts`：根目录 Aspire TS AppHost
 - `web-app/contracts`：纯 TypeScript 模型契约包
 - `web-app/frontend`：React 19 + TS/TSX 前端
-- `pytorch-training/4CImageSeg.Training`：训练脚本、数据与导出模型
+- `pytorch-training/`：训练脚本、数据与导出模型
 
 ## 当前目标
 
@@ -19,7 +19,7 @@
 
 成功标志：
 
-- `pytorch-training/4CImageSeg.Training/training_result` 下的所有 ONNX 模型都能被前端导入逻辑识别出契约 family
+- `pytorch-training/training_result` 下的所有 ONNX 模型都能被前端导入逻辑识别出契约 family
 
 ## 常用命令
 
@@ -150,7 +150,7 @@ npm run static:stop
 
 说明：
 
-- 当前静态容器部署按根路径 `/` 提供服务，不支持 `/4c/` 这类子路径挂载。
+- 当前静态容器部署按根路径 `/` 提供服务。
 - ONNX 模型文件仍由浏览器本地导入，不会打包进镜像。
 - 如果需要通过 HTTPS 或反向代理对外发布，可在此基础上继续扩展 Nginx 配置。
 

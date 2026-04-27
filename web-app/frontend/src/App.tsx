@@ -79,7 +79,7 @@ const NAV_ITEMS: ReadonlyArray<{ id: SectionId; label: string; description: stri
   { id: 'results-export', label: '结果与导出', description: '预览、结果与导出入口' },
 ]
 
-const PROJECT_REPOSITORY_URL = 'https://code.gitlink.org.cn/phantomfancy/4CImageSeg'
+const PROJECT_REPOSITORY_URL = 'https://github.com/phantomfancy/ImageSeg'
 const PROJECT_LICENSE_URL = `${PROJECT_REPOSITORY_URL}/blob/master/LICENSE`
 const FOOTER_CONTACT_EMAIL = 'contact@4cimageseg.local'
 const FOOTER_FILING_NUMBER = '备案号待补充'
@@ -1464,7 +1464,7 @@ function App() {
       <div className="page-layout">
         <header className="topbar">
           <div className="topbar__brand">
-            <div className="topbar__title">4C-ai装备识别工具</div>
+            <div className="topbar__title">ImageSeg-ai装备识别工具</div>
           </div>
 
           <nav className="topbar__page-nav" aria-label="页面导航">
@@ -1548,7 +1548,7 @@ function App() {
               <div className="home-page">
                 <section className="hero hero--home">
                   <div className="hero__content">
-                    <div className="hero__eyebrow">4C-ai装备识别工具</div>
+                    <div className="hero__eyebrow">ImageSeg-ai装备识别工具</div>
                     <h1>ai装备识别工具</h1>
                     <p className="hero__copy">
                       面向单图、视频与摄像头场景的本地 ONNX 推理工作台，使用基于CNN或Transformers的目标检测模型进行图像推理。
@@ -2081,7 +2081,7 @@ function App() {
 
         <footer className="footer">
           <div className="footer__section footer__section--brand">
-            <div className="footer__title">4C-ai装备识别工具</div>
+            <div className="footer__title">ImageSeg-ai装备识别工具</div>
             <p className="footer__copy">{FOOTER_COPYRIGHT_TEXT}</p>
             <p className="footer__copy">项目源码依据 AGPL-3.0 许可进行分发与修改。</p>
           </div>
