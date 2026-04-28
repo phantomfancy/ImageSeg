@@ -11,7 +11,7 @@ const Root = styled.div`
     background:
       linear-gradient(135deg, var(--hero-start), var(--hero-end)),
       linear-gradient(90deg, rgba(248, 245, 237, 0.08), rgba(248, 245, 237, 0.02));
-    color: var(--paper);
+    color: var(--hero-title);
     border-radius: 28px;
     box-shadow: var(--card-shadow);
     overflow: hidden;
@@ -32,7 +32,7 @@ const Root = styled.div`
     inset: auto -12% -38% 38%;
     height: 58%;
     border-radius: 999px;
-    background: radial-gradient(circle, rgba(236, 132, 88, 0.26), transparent 68%);
+    background: var(--hero-glow);
     pointer-events: none;
   }
 
@@ -48,7 +48,8 @@ const Root = styled.div`
     width: fit-content;
     padding: 6px 12px;
     border-radius: 999px;
-    background: var(--contrast-bg-soft);
+    background: var(--hero-badge-bg);
+    color: var(--hero-badge-text);
     letter-spacing: 0.18em;
     text-transform: uppercase;
     font-size: 0.75rem;
@@ -59,7 +60,7 @@ const Root = styled.div`
     font-size: clamp(2.2rem, 4vw, 4.2rem);
     line-height: 0.98;
     letter-spacing: -0.05em;
-    color: var(--contrast-muted);
+    color: var(--hero-title);
   }
 
   .hero__copy {
@@ -93,12 +94,13 @@ const Root = styled.div`
   .hero__action--primary {
     border-color: rgba(248, 245, 237, 0.24);
     background: linear-gradient(135deg, var(--accent), #db8d34);
-    color: var(--primary-action-text);
+    color: var(--hero-primary-action-text);
   }
 
   .hero__action--secondary {
-    background: var(--contrast-bg-soft);
-    color: var(--contrast-muted);
+    border-color: var(--hero-secondary-action-border);
+    background: var(--hero-secondary-action-bg);
+    color: var(--hero-secondary-action-text);
   }
 
   .hero__signal {
@@ -113,21 +115,22 @@ const Root = styled.div`
     display: grid;
     gap: 8px;
     padding: 18px;
-    border: 1px solid var(--contrast-border);
+    border: 1px solid var(--home-signal-card-border);
     border-radius: 20px;
-    background: rgba(248, 245, 237, 0.1);
+    background: var(--home-signal-card-bg);
+    box-shadow: var(--home-signal-card-shadow);
     backdrop-filter: blur(16px);
   }
 
   .hero__signal-label {
-    color: var(--contrast-soft);
+    color: var(--hero-signal-label);
     font-size: 0.74rem;
     letter-spacing: 0.08em;
     text-transform: uppercase;
   }
 
   .hero__signal-card strong {
-    color: var(--contrast-muted);
+    color: var(--hero-signal-text);
     font-size: 1rem;
     line-height: 1.45;
   }
@@ -141,9 +144,10 @@ const Root = styled.div`
   .home-card {
     padding: 20px;
     border-radius: 24px;
-    border: 1px solid var(--line);
-    background: color-mix(in srgb, var(--paper-strong) 90%, transparent);
-    box-shadow: 0 18px 34px rgba(20, 32, 42, 0.08);
+    border: 1px solid var(--home-card-border);
+    background: var(--home-card-bg);
+    box-shadow: var(--home-card-shadow);
+    color: var(--home-card-title);
   }
 
   .home-card__index {
@@ -155,11 +159,12 @@ const Root = styled.div`
   .home-card h2 {
     margin: 14px 0 10px;
     font-size: 1.08rem;
+    color: var(--home-card-title);
   }
 
   .home-card p {
     margin: 0;
-    color: var(--muted);
+    color: var(--home-card-body);
     line-height: 1.7;
   }
 
@@ -229,7 +234,7 @@ const HOME_FEATURE_ITEMS = [
   {
     index: '03',
     title: '结果复核与导出',
-    body: '同一预览区支持输入源和叠加结果切换，图像查看器可缩放、平移并复核框选细节。',
+    body: '监视器支持在原始输入上叠加识别结果，图像查看器可缩放、平移并复核框选细节。',
   },
 ] as const
 

@@ -8,7 +8,7 @@ const Root = styled.aside`
   left: 12px;
   z-index: 8;
   transform: translateY(-50%);
-  color: var(--contrast-muted);
+  color: var(--sidebar-nav-text);
 
   .sidebar__toggle {
     display: inline-grid;
@@ -54,7 +54,7 @@ const Root = styled.aside`
     border: 1px solid var(--sidebar-panel-border);
     background:
       var(--sidebar-panel-bg),
-      radial-gradient(circle at top, rgba(199, 88, 43, 0.16), transparent 40%);
+      var(--sidebar-panel-glow);
     box-shadow: var(--sidebar-panel-shadow);
     opacity: 0;
     pointer-events: none;
@@ -80,7 +80,7 @@ const Root = styled.aside`
     padding: 10px 12px;
     border: 1px solid transparent;
     border-radius: 16px;
-    background: var(--contrast-bg-subtle);
+    background: var(--sidebar-nav-item-bg);
     color: inherit;
     text-align: left;
     cursor: pointer;
@@ -89,20 +89,20 @@ const Root = styled.aside`
 
   .sidebar__nav-item:hover {
     transform: translateY(-1px);
-    border-color: var(--contrast-border);
-    background: var(--contrast-bg-soft);
+    border-color: var(--sidebar-nav-item-border-hover);
+    background: var(--sidebar-nav-item-bg-hover);
   }
 
   .sidebar__nav-item--active {
-    border-color: rgba(199, 88, 43, 0.36);
-    background: linear-gradient(135deg, rgba(199, 88, 43, 0.18), var(--contrast-bg-subtle));
+    border-color: var(--sidebar-nav-item-border-active);
+    background: var(--sidebar-nav-item-bg-active);
   }
 
   .sidebar__nav-label {
     font-size: 0.94rem;
     font-weight: 700;
     line-height: 1.25;
-    color: var(--contrast-muted);
+    color: var(--sidebar-nav-text);
   }
 
   @media (max-width: 720px) {

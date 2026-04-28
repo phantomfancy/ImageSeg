@@ -285,7 +285,7 @@ export function TopBar(props: TopBarProps) {
   return (
     <Root>
       <div className="topbar__brand">
-        <div className="topbar__title">ImageSeg-基于onnx的视觉推理工作台</div>
+        <div className="topbar__title">ImageSeg</div>
       </div>
 
       <nav className="topbar__page-nav" aria-label="页面导航">

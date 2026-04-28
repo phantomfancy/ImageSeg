@@ -123,7 +123,6 @@ export function Footer() {
       <div className="footer__section footer__section--brand">
         <div className="footer__title">ImageSeg-基于onnx的视觉推理工作台</div>
         <p className="footer__copy">{COPYRIGHT_TEXT}</p>
-        <p className="footer__copy">项目源码依据 AGPL-3.0 许可进行分发与修改。</p>
       </div>
 
       <div className="footer__section">
@@ -137,11 +136,9 @@ export function Footer() {
         <div className="footer__heading">备案与认证</div>
         <div className="footer__meta-list">
           <div className="footer__meta-item">
-            <span className="footer__label">备案信息</span>
             <span className="footer__value">{FOOTER_FILING_NUMBER}</span>
           </div>
           <div className="footer__meta-item">
-            <span className="footer__label">认证信息</span>
             <span className="footer__value">{FOOTER_CERTIFICATION_INFO}</span>
           </div>
         </div>
