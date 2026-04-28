@@ -25,7 +25,13 @@
 npm install
 ```
 
-`aspire run` 会通过根目录 `aspire.config.json` 加载 `imageseg-webapp/apphost.ts`，因此根目录 `node_modules` 必须包含 AppHost 运行时依赖；如果出现 `Cannot find package 'vscode-jsonrpc' imported from .modules\\transport.ts`，先重新执行一次 `npm install`。
+或使用 Bun：
+
+```powershell
+bun install
+```
+
+`aspire run` 会通过根目录 `aspire.config.json` 加载 `imageseg-webapp/apphost.ts`，因此根目录 `node_modules` 必须包含 AppHost 运行时依赖；如果出现 `Cannot find package 'vscode-jsonrpc' imported from .modules\\transport.ts`，先重新执行一次 `npm install` 或 `bun install`。
 
 生成 Aspire TS SDK：
 
@@ -41,6 +47,12 @@ aspire restore
 npm run dev
 ```
 
+或：
+
+```powershell
+bun run dev
+```
+
 上面的 `npm run dev` 会通过Aspire命令`aspire run`启动整个编排环境，而不是直接启动 Vite。
 
 如果只想单独启动前端 Vite 开发服务器，可使用以下任一方式：
@@ -54,11 +66,22 @@ npm run dev
 npm run dev --workspace @4cimageseg/frontend
 ```
 
+```powershell
+cd .\imageseg-webapp\frontend
+bun run dev
+```
+
 前端 Vite 默认监听 `0.0.0.0:5173`，本机访问地址通常为 `http://localhost:5173`。如需修改端口，可先设置 `PORT` 环境变量，例如：
 
 ```powershell
 $env:PORT=3000
 npm run dev --workspace @4cimageseg/frontend
+```
+
+```powershell
+$env:PORT=3000
+cd .\imageseg-webapp\frontend
+bun run dev
 ```
 
 发布部署产物：
@@ -95,6 +118,8 @@ aspire do docker-compose-down-env
 - 已安装并启动 Docker Desktop
 - 已在仓库根目录执行 `npm install`
 - 已执行 `aspire restore`
+
+如使用 Bun 安装依赖，上述 `npm install` 可替换为 `bun install`。
 
 关于 Podman：
 
@@ -165,14 +190,24 @@ npm run test
 注意：
 
 - `imageseg-webapp/frontend/public/ort` 是由 `npm run prepare:ort` 从 `onnxruntime-web` 复制生成的前端运行时资产目录，不需要提交到版本库。
+- `bun.lock` 是 Bun 的锁文件，应提交到版本库；当前仓库同时保留 `package-lock.json` 以兼容 npm。
 - `npm run test` 中的 `npm run test:frontend` 与 `npm run verify:training-models` 依赖 `imageseg-training/training_result` 下的测试模型文件集。如果当前机器没有准备 `imageseg-training/training_result`，这两项检查会因找不到 `.onnx` / `config.json` / `preprocessor_config.json` 而失败，这属于预期行为，不代表前端类型检查、`tsgo` 迁移或构建链本身存在问题。
 - `npm run publish` / `npm run deploy` 依赖 `imageseg-webapp/apphost.ts` 中已经声明 Docker Compose 部署环境，并依赖 `aspire.config.json` 中已包含 `Aspire.Hosting.Docker`。
+- 如果 `public/ort/` 下的 ONNX Runtime 资源正被开发服务器或浏览器占用，重新执行 `npm run build` / `npm run test` 或 Bun 等价命令时，复制 `ort-wasm-simd-threaded.asyncify.wasm` 可能失败；此时先停止占用进程再重试。
 - 在未准备该目录时，可先使用下面的命令验证不依赖训练产物的部分：
 
 ```powershell
 npm run typecheck
 npm run build
 npm run test:contracts
+```
+
+或使用 Bun：
+
+```powershell
+bun run typecheck
+bun run build
+bun run test:contracts
 ```
 
 ## WebGPU 下 fp16 模型兼容处理

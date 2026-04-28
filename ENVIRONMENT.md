@@ -11,6 +11,12 @@ node --version
 npm --version
 ```
 
+如果需要使用 Bun，本地也应安装 Bun 并验证：
+
+```powershell
+bun --version
+```
+
 ## 2. Aspire CLI
 
 安装 Aspire CLI，并确认版本为 `13.2+`，因为 `imageseg-webapp/apphost.ts` 依赖 TypeScript AppHost 支持：
@@ -41,9 +47,16 @@ npm install
 aspire restore
 ```
 
+或：
+
+```powershell
+bun install
+aspire restore
+```
+
 `aspire restore` 会根据根目录 `aspire.config.json` 生成 `.modules/`，并由该配置指向 `imageseg-webapp/apphost.ts`。
 当 `aspire.config.json` 中新增或升级 Aspire 包时，也要重新执行一次 `aspire restore`。
-如果随后执行 `aspire run` 时提示 `.modules\\transport.ts` 缺少 `vscode-jsonrpc`，说明根目录依赖未安装完整，重新在仓库根目录执行 `npm install` 即可。
+如果随后执行 `aspire run` 时提示 `.modules\\transport.ts` 缺少 `vscode-jsonrpc`，说明根目录依赖未安装完整，重新在仓库根目录执行 `npm install` 或 `bun install` 即可。
 
 ## 5. 启动、部署与验证
 
@@ -51,6 +64,12 @@ aspire restore
 
 ```powershell
 npm run dev
+```
+
+或：
+
+```powershell
+bun run dev
 ```
 
 发布部署产物：
@@ -102,8 +121,22 @@ npm run static:stop
 npm run build
 ```
 
+```powershell
+bun run build
+```
+
 验证：
 
 ```powershell
 npm run test
 ```
+
+```powershell
+bun run test
+```
+
+补充说明：
+
+- `bun.lock` 是 Bun 的锁文件，应提交到版本库。
+- 当前仓库同时保留 `package-lock.json`，以兼容 npm 工作流。
+- 如果 `imageseg-webapp/frontend/public/ort` 下的 ONNX Runtime 资源文件正被开发服务器或浏览器占用，重新执行 `npm run build` / `npm run test` 或 Bun 等价命令时可能出现复制失败；先停止占用进程再重试。

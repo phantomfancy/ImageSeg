@@ -18,13 +18,13 @@
     "static:run": "podman run --rm --name 4cimageseg-static -p 8080:80 4cimageseg-static:local",
     "static:stop": "podman rm -f 4cimageseg-static",
     "restore:aspire": "aspire restore",
-    "typecheck": "tsgo -p ./imageseg-webapp/tsconfig.root-tools.json --noEmit && npm run typecheck --workspace @4cimageseg/frontend && npm run typecheck --workspace @4cimageseg/contracts",
-    "build": "npm run build --workspace @4cimageseg/contracts && npm run build --workspace @4cimageseg/frontend",
-    "lint": "npm run lint --workspace @4cimageseg/frontend",
-    "test:contracts": "npm run test --workspace @4cimageseg/contracts",
-    "test:frontend": "npm run test --workspace @4cimageseg/frontend",
+    "typecheck": "tsgo -p ./imageseg-webapp/tsconfig.root-tools.json --noEmit && node ./scripts/run-workspace.mjs @4cimageseg/frontend typecheck && node ./scripts/run-workspace.mjs @4cimageseg/contracts typecheck",
+    "build": "node ./scripts/run-workspace.mjs @4cimageseg/contracts build && node ./scripts/run-workspace.mjs @4cimageseg/frontend build",
+    "lint": "node ./scripts/run-workspace.mjs @4cimageseg/frontend lint",
+    "test:contracts": "node ./scripts/run-workspace.mjs @4cimageseg/contracts test",
+    "test:frontend": "node ./scripts/run-workspace.mjs @4cimageseg/frontend test",
     "verify:training-models": "node --experimental-strip-types ./imageseg-webapp/scripts/verify-training-models.ts",
-    "test": "npm run test:contracts && npm run test:frontend && npm run verify:training-models"
+    "test": "node ./scripts/run-workspace.mjs @4cimageseg/contracts test && node ./scripts/run-workspace.mjs @4cimageseg/frontend test && node --experimental-strip-types ./imageseg-webapp/scripts/verify-training-models.ts"
   },
   "devDependencies": {
     "@typescript/native-preview": "7.0.0-dev.20260420.1",

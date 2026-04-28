@@ -4,14 +4,14 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "prepare:ort": "node --experimental-strip-types ./scripts/generate-onnx-proto-source.ts && node --experimental-strip-types ./scripts/copy-ort-assets.ts",
-    "dev": "npm run prepare:ort && vite --configLoader native",
-    "build": "npm run prepare:ort && tsgo -b && vite build --configLoader native",
+    "prepare:ort": "node --experimental-strip-types ./scripts/prepare-ort.ts",
+    "dev": "node --experimental-strip-types ./scripts/prepare-ort.ts && vite --configLoader native",
+    "build": "node --experimental-strip-types ./scripts/prepare-ort.ts && tsgo -b && vite build --configLoader native",
     "typecheck": "tsgo -b --pretty false",
     "lint": "node --experimental-strip-types ./node_modules/eslint/bin/eslint.js --flag unstable_native_nodejs_ts_config --config eslint.config.ts .",
     "test:model-package": "node --experimental-strip-types ./scripts/test-model-package.ts",
     "test:onnx-runtime-session-switch": "node --experimental-strip-types ./scripts/test-onnx-runtime-session-switch.ts",
-    "test": "npm run prepare:ort && npm run lint && npm run typecheck && npm run test:model-package && npm run test:onnx-runtime-session-switch",
+    "test": "node --experimental-strip-types ./scripts/prepare-ort.ts && node --experimental-strip-types ./node_modules/eslint/bin/eslint.js --flag unstable_native_nodejs_ts_config --config eslint.config.ts . && tsgo -b --pretty false && node --experimental-strip-types ./scripts/test-model-package.ts && node --experimental-strip-types ./scripts/test-onnx-runtime-session-switch.ts",
     "preview": "vite preview"
   },
   "dependencies": {
