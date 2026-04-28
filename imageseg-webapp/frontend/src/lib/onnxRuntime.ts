@@ -177,34 +177,93 @@ export async function runDetectionOnSource(
   targetCanvas?: HTMLCanvasElement,
 ): Promise<DetectionRun> {
   return enqueueSessionOperation(async () => {
-    const sessionState = await getSessionState(model)
-    const detectionContract = createDetectionContract(model.contract, options)
+    const detectionExecution = await executeDetection(model, source, options)
     const annotatedCanvas = captureSourceFrame(source, targetCanvas)
-    const geometry = prepareInput(sessionState, source, detectionContract)
-    const fetchNames = resolveRequestedOutputNames(sessionState.outputNames, detectionContract.decoder.outputTensorNames)
-    const normalizedOutputs = await sessionState.client.run(sessionState.inputData, fetchNames)
-    const detections = decodeDetections(
-      detectionContract,
-      normalizedOutputs,
-      geometry,
-    )
+    drawDetections(annotatedCanvas, detectionExecution.detections)
 
-    drawDetections(annotatedCanvas, detections)
-
-    return {
-      providerName: sessionState.providerName,
+    return buildDetectionRun(
+      model,
+      inputSource,
+      detectionExecution,
       annotatedCanvas,
-      recognitionResult: {
-        inputSource,
-        modelVersion: model.fileName,
-        detectedAtUtc: new Date().toISOString(),
-        detections,
-      },
-      runtimeMessage: detections.length === 0
-        ? buildNoDetectionsRuntimeMessage(detectionContract, normalizedOutputs)
-        : undefined,
-    }
+    )
   })
+}
+
+export async function runLiveDetectionOnSource(
+  model: ImportedModel,
+  source: CanvasImageSource,
+  inputSource: string,
+  options?: RunDetectionOptions,
+  targetCanvas?: HTMLCanvasElement,
+): Promise<DetectionRun> {
+  return enqueueSessionOperation(async () => {
+    const detectionExecution = await executeDetection(model, source, options)
+    const annotatedCanvas = prepareOverlayCanvas(source, targetCanvas)
+    drawDetections(annotatedCanvas, detectionExecution.detections)
+
+    return buildDetectionRun(
+      model,
+      inputSource,
+      detectionExecution,
+      annotatedCanvas,
+    )
+  })
+}
+
+async function executeDetection(
+  model: ImportedModel,
+  source: CanvasImageSource,
+  options?: RunDetectionOptions,
+) {
+  const sessionState = await getSessionState(model)
+  const detectionContract = createDetectionContract(model.contract, options)
+  const geometry = prepareInput(sessionState, source, detectionContract)
+  const fetchNames = resolveRequestedOutputNames(
+    sessionState.outputNames,
+    detectionContract.decoder.outputTensorNames,
+  )
+  const normalizedOutputs = await sessionState.client.run(sessionState.inputData, fetchNames)
+  const detections = decodeDetections(
+    detectionContract,
+    normalizedOutputs,
+    geometry,
+  )
+
+  return {
+    detectionContract,
+    detections,
+    normalizedOutputs,
+    sessionState,
+  }
+}
+
+function buildDetectionRun(
+  model: ImportedModel,
+  inputSource: string,
+  detectionExecution: Awaited<ReturnType<typeof executeDetection>>,
+  annotatedCanvas: HTMLCanvasElement,
+): DetectionRun {
+  const {
+    detectionContract,
+    detections,
+    normalizedOutputs,
+    sessionState,
+  } = detectionExecution
+
+  return {
+    providerName: sessionState.providerName,
+    annotatedCanvas,
+    recognitionResult: {
+      inputSource,
+      modelVersion: model.fileName,
+      detectedAtUtc: new Date().toISOString(),
+      detections,
+    },
+    runtimeMessage: detections.length === 0
+      ? buildNoDetectionsRuntimeMessage(detectionContract, normalizedOutputs)
+      : undefined,
+  }
 }
 
 async function getSessionState(model: ImportedModel): Promise<SessionState> {
@@ -529,22 +588,52 @@ export function drawSourceToCanvas(
   return captureSourceFrame(source, targetCanvas)
 }
 
+export function drawLiveOverlayToCanvas(
+  source: CanvasImageSource,
+  targetCanvas?: HTMLCanvasElement,
+): HTMLCanvasElement {
+  return prepareOverlayCanvas(source, targetCanvas)
+}
+
 function captureSourceFrame(
   source: CanvasImageSource,
   targetCanvas?: HTMLCanvasElement,
 ): HTMLCanvasElement {
   const { width, height } = resolveSourceDimensions(source)
   const canvas = targetCanvas ?? document.createElement('canvas')
-  canvas.width = width
-  canvas.height = height
-  const context = get2dContext(canvas)
 
   if (typeof HTMLCanvasElement !== 'undefined' && source instanceof HTMLCanvasElement && source === canvas) {
     return canvas
   }
 
+  if (canvas.width !== width) {
+    canvas.width = width
+  }
+  if (canvas.height !== height) {
+    canvas.height = height
+  }
+
+  const context = get2dContext(canvas)
   context.clearRect(0, 0, width, height)
   context.drawImage(source, 0, 0, width, height)
+  return canvas
+}
+
+function prepareOverlayCanvas(
+  source: CanvasImageSource,
+  targetCanvas?: HTMLCanvasElement,
+): HTMLCanvasElement {
+  const { width, height } = resolveSourceDimensions(source)
+  const canvas = targetCanvas ?? document.createElement('canvas')
+  if (canvas.width !== width) {
+    canvas.width = width
+  }
+  if (canvas.height !== height) {
+    canvas.height = height
+  }
+
+  const context = get2dContext(canvas)
+  context.clearRect(0, 0, width, height)
   return canvas
 }
 

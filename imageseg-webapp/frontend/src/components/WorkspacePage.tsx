@@ -265,9 +265,8 @@ const Root = styled.div`
   .preview-stage__media {
     --preview-max-height: min(60vh, 680px);
     position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    display: grid;
+    place-items: center;
     min-height: 240px;
     max-height: var(--preview-max-height);
     margin-top: 12px;
@@ -319,6 +318,7 @@ const Root = styled.div`
   .preview-stage__video,
   .preview-stage__canvas {
     display: block;
+    grid-area: 1 / 1;
     max-width: 100%;
     max-height: calc(var(--preview-max-height) - 24px);
     width: auto;
@@ -331,6 +331,10 @@ const Root = styled.div`
     position: absolute;
     inset: 12px;
     opacity: 0;
+    pointer-events: none;
+  }
+
+  .preview-stage__canvas--overlay {
     pointer-events: none;
   }
 
@@ -903,7 +907,7 @@ export function WorkspacePage(props: WorkspacePageProps) {
 
         <article className="panel panel--preview operation-grid__preview" id="results-export" data-nav-section>
           <header className="panel__header">
-            <h2>统一预览</h2>
+            <h2>监视器</h2>
           </header>
 
           <div className="preview-card preview-stage">
@@ -939,7 +943,7 @@ export function WorkspacePage(props: WorkspacePageProps) {
                 videoPreviewUrl ? (
                   <video
                     ref={sourceVideoRef}
-                    className={`preview-stage__video${hasRenderedResult ? ' preview-stage__visual--hidden' : ''}`}
+                    className="preview-stage__video"
                     src={videoPreviewUrl}
                     controls
                     playsInline
@@ -956,7 +960,7 @@ export function WorkspacePage(props: WorkspacePageProps) {
                 <>
                   <video
                     ref={cameraVideoRef}
-                    className={`preview-stage__video${streamState === 'running' && !hasRenderedResult ? '' : ' preview-stage__visual--hidden'}`}
+                    className={`preview-stage__video${streamState === 'running' ? '' : ' preview-stage__visual--hidden'}`}
                     autoPlay
                     muted
                     playsInline
@@ -971,7 +975,11 @@ export function WorkspacePage(props: WorkspacePageProps) {
 
               <canvas
                 ref={resultCanvasRef}
-                className={`preview-stage__canvas${hasRenderedResult ? '' : ' preview-stage__visual--hidden'}`}
+                className={`preview-stage__canvas${
+                  inputMode !== 'image'
+                    ? ' preview-stage__canvas--overlay'
+                    : ''
+                }${hasRenderedResult ? '' : ' preview-stage__visual--hidden'}`}
               />
             </div>
           </div>
@@ -1137,7 +1145,7 @@ export function WorkspacePage(props: WorkspacePageProps) {
             <Metric label="Source Mode" value={inputMode} />
             <Metric label="Detection Count" value={String(detectionItems.length)} />
             <Metric label="Current Time" value={currentTimeLabel} />
-            <Metric label="FPS" value={displayedFps} />
+            <Metric label="推理 FPS" value={displayedFps} />
           </div>
 
           {detectionItems.length === 0 ? (

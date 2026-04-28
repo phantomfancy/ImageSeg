@@ -167,9 +167,8 @@ const Root = styled.div`
 
   .preview-zoom__media-wrapper {
     position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    display: grid;
+    place-items: center;
     max-width: 100%;
     max-height: 100%;
     transform-origin: center center;
@@ -188,6 +187,7 @@ const Root = styled.div`
   .preview-zoom__video,
   .preview-zoom__canvas {
     display: block;
+    grid-area: 1 / 1;
     max-width: 100%;
     max-height: 100%;
     width: auto;
@@ -199,6 +199,10 @@ const Root = styled.div`
   .preview-zoom__video {
     background: var(--modal-video-bg);
     box-shadow: inset 0 0 0 1px var(--modal-video-outline);
+  }
+
+  .preview-zoom__canvas--overlay {
+    pointer-events: none;
   }
 
   @media (max-width: 1040px) {
@@ -358,7 +362,11 @@ export function PreviewZoomModal(props: PreviewZoomModalProps) {
           <div className="preview-zoom__summary">
             <div className="preview-zoom__summary-top">
               <span className="preview-zoom__badge">
-                {isScalablePreviewTarget ? '图像查看器' : '媒体播放器'}
+                {previewZoomTarget === 'monitor-video' || previewZoomTarget === 'monitor-camera'
+                  ? '监视器'
+                  : isScalablePreviewTarget
+                    ? '图像查看器'
+                    : '媒体播放器'}
               </span>
               {isScalablePreviewTarget ? (
                 <span className="preview-zoom__scale">{previewZoomScaleLabel}</span>
@@ -453,19 +461,31 @@ export function PreviewZoomModal(props: PreviewZoomModalProps) {
               <img className="preview-zoom__image" src={imagePreviewUrl} alt="放大预览图片" />
             ) : null}
 
-            {previewZoomTarget === 'video' || previewZoomTarget === 'camera' ? (
+            {previewZoomTarget === 'video' ||
+            previewZoomTarget === 'camera' ||
+            previewZoomTarget === 'monitor-video' ||
+            previewZoomTarget === 'monitor-camera' ? (
               <video
                 ref={previewZoomVideoRef}
                 className="preview-zoom__video"
-                autoPlay={previewZoomTarget === 'camera'}
-                controls={previewZoomTarget === 'video'}
+                autoPlay={previewZoomTarget === 'camera' || previewZoomTarget === 'monitor-camera'}
+                controls={previewZoomTarget === 'video' || previewZoomTarget === 'monitor-video'}
                 muted
                 playsInline
               />
             ) : null}
 
-            {previewZoomTarget === 'result-canvas' ? (
-              <canvas ref={previewZoomCanvasRef} className="preview-zoom__canvas" />
+            {previewZoomTarget === 'result-canvas' ||
+            previewZoomTarget === 'monitor-video' ||
+            previewZoomTarget === 'monitor-camera' ? (
+              <canvas
+                ref={previewZoomCanvasRef}
+                className={`preview-zoom__canvas${
+                  previewZoomTarget === 'monitor-video' || previewZoomTarget === 'monitor-camera'
+                    ? ' preview-zoom__canvas--overlay'
+                    : ''
+                }`}
+              />
             ) : null}
           </div>
         </div>

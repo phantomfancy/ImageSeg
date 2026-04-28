@@ -84,10 +84,12 @@ export function usePreviewZoom(args: UsePreviewZoomArgs) {
     previewZoomTarget !== null &&
     isPreviewScalableTarget(previewZoomTarget)
   const previewOpenLabel = availablePreviewZoomTarget === null
-    ? '打开预览'
-    : isPreviewScalableTarget(availablePreviewZoomTarget)
-      ? '打开查看器'
-      : '打开播放器'
+    ? '打开监视器'
+    : availablePreviewZoomTarget === 'monitor-video' || availablePreviewZoomTarget === 'monitor-camera'
+      ? '打开监视器'
+      : isPreviewScalableTarget(availablePreviewZoomTarget)
+        ? '打开查看器'
+        : '打开播放器'
   const previewZoomScaleLabel = `${Math.round(previewViewerScale * 100)}%`
 
   const resetPreviewViewer = useCallback(() => {
@@ -111,7 +113,14 @@ export function usePreviewZoom(args: UsePreviewZoomArgs) {
   }, [])
 
   useEffect(() => {
-    if (!isPreviewZoomOpen || previewZoomTarget !== 'result-canvas') {
+    if (
+      !isPreviewZoomOpen ||
+      (
+        previewZoomTarget !== 'result-canvas' &&
+        previewZoomTarget !== 'monitor-video' &&
+        previewZoomTarget !== 'monitor-camera'
+      )
+    ) {
       return
     }
 
@@ -137,7 +146,12 @@ export function usePreviewZoom(args: UsePreviewZoomArgs) {
   }, [isPreviewZoomOpen, isScalablePreviewTarget, previewViewerScale, previewZoomTarget])
 
   useEffect(() => {
-    if (!isPreviewZoomOpen || !previewZoomTarget || previewZoomTarget === 'image' || previewZoomTarget === 'result-canvas') {
+    if (
+      !isPreviewZoomOpen ||
+      !previewZoomTarget ||
+      previewZoomTarget === 'image' ||
+      previewZoomTarget === 'result-canvas'
+    ) {
       return
     }
 
@@ -149,7 +163,7 @@ export function usePreviewZoom(args: UsePreviewZoomArgs) {
     modalVideo.playsInline = true
     modalVideo.muted = true
 
-    if (previewZoomTarget === 'video') {
+    if (previewZoomTarget === 'video' || previewZoomTarget === 'monitor-video') {
       modalVideo.srcObject = null
       modalVideo.src = videoPreviewUrl
       if (sourceVideoRef.current) {
@@ -158,7 +172,7 @@ export function usePreviewZoom(args: UsePreviewZoomArgs) {
           void modalVideo.play().catch(() => {})
         }
       }
-    } else if (previewZoomTarget === 'camera') {
+    } else if (previewZoomTarget === 'camera' || previewZoomTarget === 'monitor-camera') {
       modalVideo.removeAttribute('src')
       modalVideo.srcObject = cameraStreamRef.current
       void modalVideo.play().catch(() => {})

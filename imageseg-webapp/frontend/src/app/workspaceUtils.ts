@@ -120,13 +120,18 @@ export function syncCanvas(source: HTMLCanvasElement, target: HTMLCanvasElement 
     return
   }
 
-  target.width = source.width
-  target.height = source.height
+  if (target.width !== source.width) {
+    target.width = source.width
+  }
+  if (target.height !== source.height) {
+    target.height = source.height
+  }
   const context = target.getContext('2d')
   if (!context) {
     return
   }
 
+  context.clearRect(0, 0, target.width, target.height)
   context.drawImage(source, 0, 0)
 }
 
@@ -200,7 +205,7 @@ export function resolvePreviewZoomTarget(input: {
   streamState: StreamState
   videoPreviewUrl: string
 }): PreviewZoomTarget | null {
-  if (input.hasRenderedResult) {
+  if (input.inputMode === 'image' && input.hasRenderedResult) {
     return 'result-canvas'
   }
 
@@ -209,11 +214,11 @@ export function resolvePreviewZoomTarget(input: {
   }
 
   if (input.inputMode === 'video' && input.videoPreviewUrl) {
-    return 'video'
+    return input.hasRenderedResult ? 'monitor-video' : 'video'
   }
 
   if (input.inputMode === 'camera' && input.streamState === 'running') {
-    return 'camera'
+    return input.hasRenderedResult ? 'monitor-camera' : 'camera'
   }
 
   return null
@@ -246,7 +251,12 @@ export function resolveThemeMode(
 }
 
 export function isPreviewScalableTarget(target: PreviewZoomTarget): boolean {
-  return target === 'image' || target === 'result-canvas'
+  return (
+    target === 'image' ||
+    target === 'result-canvas' ||
+    target === 'monitor-video' ||
+    target === 'monitor-camera'
+  )
 }
 
 export function clampPreviewZoomScale(value: number): number {

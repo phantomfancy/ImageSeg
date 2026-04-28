@@ -6,7 +6,13 @@ export type PageId = 'home' | 'workspace'
 
 export type SectionId = 'input-import' | 'inference-settings' | 'results-export'
 
-export type PreviewZoomTarget = 'image' | 'video' | 'camera' | 'result-canvas'
+export type PreviewZoomTarget =
+  | 'image'
+  | 'video'
+  | 'camera'
+  | 'result-canvas'
+  | 'monitor-video'
+  | 'monitor-camera'
 
 export type PreviewViewerOffset = {
   x: number

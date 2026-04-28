@@ -30,6 +30,7 @@ import {
   syncCanvas,
   toDetectionItems,
 } from '../app/workspaceUtils'
+import { createLatestFrameGate } from '../app/latestFrameGate'
 import type {
   DetectionRun,
   ImportedModel,
@@ -37,6 +38,7 @@ import type {
 } from '../lib/onnxRuntime'
 import {
   runDetectionOnSource,
+  runLiveDetectionOnSource,
   runSingleImageDetection,
 } from '../lib/onnxRuntime'
 
@@ -97,6 +99,7 @@ export function useDetectionWorkspace(args: UseDetectionWorkspaceArgs) {
   const frameLoopTokenRef = useRef(0)
   const frameInFlightRef = useRef(false)
   const frameTimestampsRef = useRef<number[]>([])
+  const liveFrameGateRef = useRef(createLatestFrameGate())
 
   const preferredVideoMimeType = getPreferredVideoMimeType()
 
@@ -159,6 +162,7 @@ export function useDetectionWorkspace(args: UseDetectionWorkspaceArgs) {
     resetPreviewViewerRef.current?.()
     frameLoopTokenRef.current += 1
     frameInFlightRef.current = false
+    liveFrameGateRef.current.reset()
 
     if (sourceVideoRef.current) {
       sourceVideoRef.current.pause()
@@ -279,15 +283,106 @@ export function useDetectionWorkspace(args: UseDetectionWorkspaceArgs) {
     })
   }
 
-  function startVideoLoop(
+  function startRealtimeLoop(
     videoElement: HTMLVideoElement,
     sourceKind: 'video' | 'camera',
     detectionOptions: RunDetectionOptions,
   ) {
-    void processVideoFrames(videoElement, sourceKind, undefined, detectionOptions)
-      .catch((error) => {
-        stopActiveStream(`实时识别失败：${formatError(error)}`)
+    const token = frameLoopTokenRef.current + 1
+    frameLoopTokenRef.current = token
+    frameTimestampsRef.current = []
+    liveFrameGateRef.current.reset()
+
+    const handleStreamFinished = () => {
+      if (sourceKind !== 'video' || frameLoopTokenRef.current !== token) {
+        return
+      }
+
+      if (!liveFrameGateRef.current.hasInFlightRun()) {
+        stopActiveStream('视频识别已结束。')
+      }
+    }
+
+    const runLatestFrame = async () => {
+      const importedModel = importedModelRef.current
+      if (!importedModel || frameLoopTokenRef.current !== token) {
+        liveFrameGateRef.current.reset()
+        return
+      }
+
+      try {
+        const detectionRun = await runLiveDetectionOnSource(
+          importedModel,
+          videoElement,
+          buildFrameSourceLabel(
+            sourceKind,
+            videoElement.currentTime,
+            videoFile?.name,
+            selectedCameraId,
+            cameraDevices,
+          ),
+          detectionOptions,
+          resultCanvasRef.current ?? undefined,
+        )
+        if (frameLoopTokenRef.current !== token) {
+          liveFrameGateRef.current.reset()
+          return
+        }
+
+        const nextFps = calculateNextFps(frameTimestampsRef.current, performance.now())
+        applyDetectionRun(detectionRun, videoElement.currentTime, undefined, nextFps)
+      } catch (error) {
+        if (frameLoopTokenRef.current === token) {
+          stopActiveStream(`实时识别失败：${formatError(error)}`)
+        }
+        return
+      }
+
+      if (frameLoopTokenRef.current !== token) {
+        liveFrameGateRef.current.reset()
+        return
+      }
+
+      if (liveFrameGateRef.current.finishRun()) {
+        void runLatestFrame()
+        return
+      }
+
+      if (sourceKind === 'video' && videoElement.ended) {
+        stopActiveStream('视频识别已结束。')
+      }
+    }
+
+    const scheduleNextFrame = () => {
+      if (frameLoopTokenRef.current !== token) {
+        return
+      }
+
+      requestNextVideoFrame(videoElement, () => {
+        if (frameLoopTokenRef.current !== token) {
+          return
+        }
+
+        if (videoElement.ended) {
+          handleStreamFinished()
+          return
+        }
+
+        if (videoElement.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+          if (liveFrameGateRef.current.requestRun()) {
+            void runLatestFrame()
+          }
+        }
+
+        scheduleNextFrame()
       })
+    }
+
+    if (sourceKind === 'video') {
+      videoElement.addEventListener('ended', handleStreamFinished, { once: true })
+    }
+
+    scheduleNextFrame()
   }
 
   async function processVideoFrames(
@@ -448,7 +543,7 @@ export function useDetectionWorkspace(args: UseDetectionWorkspaceArgs) {
       startTransition(() => {
         setStreamState('running')
       })
-      startVideoLoop(videoElement, 'video', detectionOptions)
+      startRealtimeLoop(videoElement, 'video', detectionOptions)
       setStatusMessage('视频实时识别已启动。')
     } catch (error) {
       setStreamState('idle')
@@ -498,7 +593,7 @@ export function useDetectionWorkspace(args: UseDetectionWorkspaceArgs) {
       startTransition(() => {
         setStreamState('running')
       })
-      startVideoLoop(videoElement, 'camera', detectionOptions)
+      startRealtimeLoop(videoElement, 'camera', detectionOptions)
       setStatusMessage('摄像头实时识别已启动。')
     } catch (error) {
       stopActiveStream()

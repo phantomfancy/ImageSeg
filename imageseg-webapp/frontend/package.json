@@ -1,38 +1,39 @@
 {
-  "name": "@4cimageseg/frontend",
-  "private": true,
-  "version": "0.0.0",
-  "type": "module",
-  "scripts": {
-    "prepare:ort": "node --experimental-strip-types ./scripts/prepare-ort.ts",
-    "dev": "node --experimental-strip-types ./scripts/prepare-ort.ts && vite --configLoader native",
-    "build": "node --experimental-strip-types ./scripts/prepare-ort.ts && tsgo -b && vite build --configLoader native",
-    "typecheck": "tsgo -b --pretty false",
-    "lint": "node --experimental-strip-types ./node_modules/eslint/bin/eslint.js --flag unstable_native_nodejs_ts_config --config eslint.config.ts .",
-    "test:model-package": "node --experimental-strip-types ./scripts/test-model-package.ts",
-    "test:onnx-runtime-session-switch": "node --experimental-strip-types ./scripts/test-onnx-runtime-session-switch.ts",
-    "test": "node --experimental-strip-types ./scripts/prepare-ort.ts && node --experimental-strip-types ./node_modules/eslint/bin/eslint.js --flag unstable_native_nodejs_ts_config --config eslint.config.ts . && tsgo -b --pretty false && node --experimental-strip-types ./scripts/test-model-package.ts && node --experimental-strip-types ./scripts/test-onnx-runtime-session-switch.ts",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "@types/styled-components": "^5.1.36",
-    "onnxruntime-web": "^1.24.3",
-    "react": "^19.2.4",
-    "react-dom": "^19.2.4",
-    "styled-components": "^6.4.1"
-  },
-  "devDependencies": {
-    "@eslint/js": "^9.39.4",
-    "@types/node": "^24.12.2",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.1",
-    "eslint": "^9.39.4",
-    "eslint-plugin-react-hooks": "^7.0.1",
-    "eslint-plugin-react-refresh": "^0.5.2",
-    "globals": "^17.4.0",
-    "typescript": "~6.0.2",
-    "typescript-eslint": "^8.58.0",
-    "vite": "^8.0.4"
-  }
+    "name": "@4cimageseg/frontend",
+    "private": true,
+    "version": "0.0.0",
+    "type": "module",
+    "scripts": {
+        "prepare:ort": "node --experimental-strip-types ./scripts/prepare-ort.ts",
+        "dev": "node --experimental-strip-types ./scripts/prepare-ort.ts && vite --configLoader native",
+        "build": "node --experimental-strip-types ./scripts/prepare-ort.ts && tsgo -b && vite build --configLoader native",
+        "typecheck": "tsgo -b --pretty false",
+        "lint": "node --experimental-strip-types ./node_modules/eslint/bin/eslint.js --flag unstable_native_nodejs_ts_config --config eslint.config.ts .",
+        "test:latest-frame-gate": "node --experimental-strip-types ./scripts/test-latest-frame-gate.ts",
+        "test:model-package": "node --experimental-strip-types ./scripts/test-model-package.ts",
+        "test:onnx-runtime-session-switch": "node --experimental-strip-types ./scripts/test-onnx-runtime-session-switch.ts",
+        "test": "node --experimental-strip-types ./scripts/prepare-ort.ts && node --experimental-strip-types ./node_modules/eslint/bin/eslint.js --flag unstable_native_nodejs_ts_config --config eslint.config.ts . && tsgo -b --pretty false && node --experimental-strip-types ./scripts/test-model-package.ts && node --experimental-strip-types ./scripts/test-onnx-runtime-session-switch.ts && node --experimental-strip-types ./scripts/test-latest-frame-gate.ts",
+        "preview": "vite preview"
+    },
+    "dependencies": {
+        "@types/styled-components": "^5.1.36",
+        "onnxruntime-web": "^1.24.3",
+        "react": "^19.2.4",
+        "react-dom": "^19.2.4",
+        "styled-components": "^6.4.1"
+    },
+    "devDependencies": {
+        "@eslint/js": "^9.39.4",
+        "@types/node": "^24.12.2",
+        "@types/react": "^19.2.14",
+        "@types/react-dom": "^19.2.3",
+        "@vitejs/plugin-react": "^6.0.1",
+        "eslint": "^9.39.4",
+        "eslint-plugin-react-hooks": "^7.0.1",
+        "eslint-plugin-react-refresh": "^0.5.2",
+        "globals": "^17.4.0",
+        "typescript": "~6.0.2",
+        "typescript-eslint": "^8.58.0",
+        "vite": "^8.0.4"
+    }
 }
