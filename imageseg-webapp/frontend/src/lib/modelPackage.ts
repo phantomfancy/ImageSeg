@@ -28,7 +28,7 @@ export interface ModelPackageSidecars {
 export interface InspectedOnnxModel {
   key: string
   fileName: string
-  bytes: Uint8Array
+  sourceFile: File
   family: ModelFamily
   inputs: TensorDescriptor[]
   outputs: TensorDescriptor[]
@@ -46,7 +46,7 @@ export interface FinalizeModelImportOptions {
 export interface InspectedModelPackage {
   key: string
   fileName: string
-  bytes: Uint8Array
+  sourceFile: File
   contract: ResolvedModelContract
   sidecars: ModelPackageSidecars
   webGpuCompatibility: WebGpuCompatibilityReport
@@ -82,7 +82,7 @@ export async function inspectOnnxModelFile(file: File): Promise<InspectedOnnxMod
   return {
     key: buildModelKey(file),
     fileName: file.name,
-    bytes,
+    sourceFile: file,
     family,
     inputs: parsedModel.inputs,
     outputs: parsedModel.outputs,
@@ -142,7 +142,7 @@ export async function finalizeModelImport(options: FinalizeModelImportOptions): 
   return {
     key: onnxModel.key,
     fileName: onnxModel.fileName,
-    bytes: onnxModel.bytes,
+    sourceFile: onnxModel.sourceFile,
     contract: resolveModelContract({
       inputs: onnxModel.inputs,
       outputs: onnxModel.outputs,

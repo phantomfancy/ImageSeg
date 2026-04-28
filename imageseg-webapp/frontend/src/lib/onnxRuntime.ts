@@ -63,7 +63,7 @@ export interface WebGpuSupportState {
 export interface ImportedModel {
   key: string
   fileName: string
-  bytes: Uint8Array
+  sourceFile: File
   contract: InspectedModelPackage['contract']
   providerName: 'webgpu'
   sidecars: InspectedModelPackage['sidecars']
@@ -119,7 +119,7 @@ export async function inspectImportedModel(options: FinalizeModelImportOptions):
   const {
     key,
     fileName,
-    bytes,
+    sourceFile,
     contract,
     sidecars,
   } = inspectedPackage
@@ -127,7 +127,7 @@ export async function inspectImportedModel(options: FinalizeModelImportOptions):
   return {
     key,
     fileName,
-    bytes,
+    sourceFile,
     contract,
     providerName: 'webgpu',
     sidecars,
@@ -254,9 +254,12 @@ async function createSessionState(model: ImportedModel): Promise<SessionState> {
   const client = await createRuntimeWorkerClient()
 
   try {
+    // Read the ONNX file only when constructing a session so the main thread
+    // does not retain a large model buffer across the whole import lifecycle.
+    const bytes = new Uint8Array(await model.sourceFile.arrayBuffer())
     const metadata = await client.init({
       modelKey: model.key,
-      bytes: model.bytes,
+      bytes,
       preferredInputName: model.contract.preprocess.inputTensorName,
       inputDims,
       enableGraphCapture: true,
@@ -352,13 +355,11 @@ class BrowserRuntimeWorkerClient implements RuntimeWorkerClient {
   }
 
   init(options: RuntimeWorkerInitOptions): Promise<RuntimeWorkerSessionMetadata> {
-    const bytes = options.bytes.slice()
     return this.post<RuntimeWorkerSessionMetadata>({
       type: 'init',
       requestId: this.nextRequestId++,
       ...options,
-      bytes,
-    }, [bytes.buffer])
+    }, [options.bytes.buffer])
   }
 
   run(inputData: Float32Array, fetchNames: readonly string[]): Promise<Record<string, TensorLike>> {

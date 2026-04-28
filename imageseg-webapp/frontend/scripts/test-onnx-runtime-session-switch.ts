@@ -169,7 +169,7 @@ function createTestModel(modelId: number, fileName: string): ImportedModel {
   return {
     key: `${fileName}:${modelId}`,
     fileName,
-    bytes: new Uint8Array([modelId]),
+    sourceFile: new File([new Uint8Array([modelId])], fileName, { lastModified: modelId }),
     contract,
     providerName: 'webgpu',
     sidecars: {},
