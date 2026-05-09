@@ -415,3 +415,4 @@ FodyWeavers.xsd
 # JetBrains Rider
 *.sln.iml
 
+imageseg-webapp/frontend/public/favicon_src.svg

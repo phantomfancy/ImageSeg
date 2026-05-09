@@ -16,8 +16,18 @@ const Root = styled.header`
   border-bottom: 1px solid var(--line);
 
   .topbar__brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
     flex: 0 0 auto;
     min-width: 0;
+  }
+
+  .topbar__brand-icon {
+    width: 26px;
+    height: 26px;
+    object-fit: contain;
+    flex: 0 0 auto;
   }
 
   .topbar__title {
@@ -150,6 +160,11 @@ const Root = styled.header`
       font-size: 0.94rem;
     }
 
+    .topbar__brand-icon {
+      width: 24px;
+      height: 24px;
+    }
+
     .topbar__page-nav {
       flex-wrap: nowrap;
       justify-content: center;
@@ -179,6 +194,15 @@ const Root = styled.header`
 
     .topbar__title {
       font-size: 0.84rem;
+    }
+
+    .topbar__brand {
+      gap: 6px;
+    }
+
+    .topbar__brand-icon {
+      width: 21px;
+      height: 21px;
     }
 
     .topbar__page-nav {
@@ -285,6 +309,7 @@ export function TopBar(props: TopBarProps) {
   return (
     <Root>
       <div className="topbar__brand">
+        <img className="topbar__brand-icon" src="/favicon.svg" alt="" aria-hidden="true" />
         <div className="topbar__title">ImageSeg</div>
       </div>
 

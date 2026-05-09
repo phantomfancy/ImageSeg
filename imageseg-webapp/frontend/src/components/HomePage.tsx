@@ -209,6 +209,7 @@ const Root = styled.div`
       padding: 14px;
       border-radius: 16px;
     }
+
   }
 `
 
