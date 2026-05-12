@@ -19,6 +19,7 @@ dataset*/
 runs/
 imageseg-training/dataset*
 imageseg-training/runs
+imageseg-training/
 
 # User-specific files
 *.rsuser
